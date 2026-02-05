@@ -57,11 +57,6 @@ token="${TOKEN}"
 [tunnels]
 ports=["${LOCAL_PORT}=${REMOTE_DEST}"]
 
-[security]
-max_connections_per_client=100
-connection_timeout=300
-allowed_destinations=["0.0.0.0/0"]
-
 [logging]
 level="info"
 file="/var/log/ghostwire-server.log"
