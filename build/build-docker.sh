@@ -6,16 +6,20 @@ echo "Building GhostWire binaries in Docker..."
 cd "$(dirname "$0")/.."
 
 echo "Building Docker image..."
-docker build \
-  --build-arg HTTP_PROXY=${HTTP_PROXY:-} \
-  --build-arg HTTPS_PROXY=${HTTPS_PROXY:-} \
-  -t ghostwire-builder -f build/Dockerfile .
+BUILD_ARGS=""
+if [ -n "${HTTP_PROXY:-}" ]; then
+  BUILD_ARGS="$BUILD_ARGS --build-arg HTTP_PROXY=$HTTP_PROXY"
+fi
+if [ -n "${HTTPS_PROXY:-}" ]; then
+  BUILD_ARGS="$BUILD_ARGS --build-arg HTTPS_PROXY=$HTTPS_PROXY"
+fi
+docker build $BUILD_ARGS -t ghostwire-builder -f build/Dockerfile .
 
 echo "Building binaries..."
 docker run --rm -v "$(pwd):/build" ghostwire-builder bash -c "
 cd /build
-python -m PyInstaller --onefile --name ghostwire-server server.py
-python -m PyInstaller --onefile --name ghostwire-client client.py
+python3.13 -m PyInstaller --onefile --name ghostwire-server server.py
+python3.13 -m PyInstaller --onefile --name ghostwire-client client.py
 "
 
 echo "Generating checksums..."

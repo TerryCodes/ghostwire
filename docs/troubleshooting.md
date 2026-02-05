@@ -62,7 +62,12 @@ Tokens should have no leading/trailing spaces in configuration files.
 
 3. **Regenerate token if needed:**
 ```bash
-python3.13 -c "from nanoid import generate; print(generate(size=20))"
+./ghostwire-server --generate-token
+```
+
+Or if using the source:
+```bash
+python3.13 server.py --generate-token
 ```
 
 Update both server and client configurations with the new token.
