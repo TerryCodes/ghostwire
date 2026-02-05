@@ -32,7 +32,14 @@ class GhostWireClient:
                     server_url=self.config.server_url.replace(self.config.cloudflare_host,best_ip)
                     logger.info(f"Using CloudFlare IP: {best_ip}")
             self.websocket=await websockets.connect(server_url,max_size=None)
-            auth_msg=pack_auth_message(self.config.token)
+            pubkey_msg=await asyncio.wait_for(self.websocket.recv(),timeout=10)
+            if len(pubkey_msg)<9:
+                raise ValueError("Invalid public key message")
+            msg_type,_,pubkey_bytes,_=unpack_message(pubkey_msg,None)
+            if msg_type!=MSG_PUBKEY:
+                raise ValueError("Expected public key from server")
+            server_public_key=deserialize_public_key(pubkey_bytes)
+            auth_msg=pack_auth_message(self.config.token,server_public_key)
             await self.websocket.send(auth_msg)
             self.key=derive_key(self.config.token,self.config.server_url)
             logger.info("Connected and authenticated to server")

@@ -3,8 +3,10 @@ import os
 import hashlib
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes,serialization
+from cryptography.hazmat.primitives.asymmetric import rsa,padding
 
+MSG_PUBKEY=0x00
 MSG_AUTH=0x01
 MSG_CONNECT=0x02
 MSG_DATA=0x03
@@ -12,6 +14,22 @@ MSG_CLOSE=0x04
 MSG_PING=0x05
 MSG_PONG=0x06
 MSG_ERROR=0x07
+
+def generate_rsa_keypair():
+    private_key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    return private_key,private_key.public_key()
+
+def serialize_public_key(public_key):
+    return public_key.public_bytes(encoding=serialization.Encoding.DER,format=serialization.PublicFormat.SubjectPublicKeyInfo)
+
+def deserialize_public_key(public_key_bytes):
+    return serialization.load_der_public_key(public_key_bytes)
+
+def rsa_encrypt(public_key,plaintext):
+    return public_key.encrypt(plaintext,padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
+
+def rsa_decrypt(private_key,ciphertext):
+    return private_key.decrypt(ciphertext,padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
 
 def derive_key(token,server_url):
     salt=hashlib.sha256(server_url.encode()).digest()[:16]
@@ -36,9 +54,19 @@ def pack_header(msg_type,conn_id,payload_length):
 def unpack_header(header):
     return struct.unpack("!BII",header)
 
-def pack_auth_message(token):
-    header=pack_header(MSG_AUTH,0,len(token))
-    return header+token.encode()
+def pack_pubkey(public_key):
+    pubkey_bytes=serialize_public_key(public_key)
+    header=pack_header(MSG_PUBKEY,0,len(pubkey_bytes))
+    return header+pubkey_bytes
+
+def pack_auth_message(token,public_key=None):
+    if public_key:
+        encrypted_token=rsa_encrypt(public_key,token.encode())
+        header=pack_header(MSG_AUTH,0,len(encrypted_token))
+        return header+encrypted_token
+    else:
+        header=pack_header(MSG_AUTH,0,len(token))
+        return header+token.encode()
 
 def pack_message(msg_type,conn_id,payload,key):
     header=pack_header(msg_type,conn_id,0)
@@ -54,8 +82,10 @@ def unpack_message(data,key):
     if len(data)<9+payload_length:
         raise ValueError("Incomplete message")
     payload=data[9:9+payload_length]
+    if msg_type==MSG_PUBKEY:
+        return msg_type,conn_id,payload,9+payload_length
     if msg_type==MSG_AUTH:
-        return msg_type,conn_id,payload.decode(),9+payload_length
+        return msg_type,conn_id,payload,9+payload_length
     decrypted=decrypt_payload(key,payload,header)
     return msg_type,conn_id,decrypted,9+payload_length
 

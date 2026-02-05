@@ -24,20 +24,29 @@ class GhostWireServer:
         self.tunnel_manager=TunnelManager()
         self.listeners=[]
         self.send_lock=asyncio.Lock()
+        logger.info("Generating RSA key pair for secure authentication...")
+        self.private_key,self.public_key=generate_rsa_keypair()
 
     async def handle_client(self,websocket):
         client_id=f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
         logger.info(f"New connection from {client_id}")
         authenticated=False
         try:
+            pubkey_msg=pack_pubkey(self.public_key)
+            await websocket.send(pubkey_msg)
             buffer=b""
             auth_msg=await asyncio.wait_for(websocket.recv(),timeout=10)
             buffer+=auth_msg
             if len(buffer)>=9:
-                msg_type,conn_id,token,consumed=unpack_message(buffer,None)
+                msg_type,conn_id,encrypted_token,consumed=unpack_message(buffer,None)
                 buffer=buffer[consumed:]
                 if msg_type!=MSG_AUTH:
                     logger.warning(f"Expected AUTH message from {client_id}")
+                    return
+                try:
+                    token=rsa_decrypt(self.private_key,encrypted_token).decode()
+                except Exception as e:
+                    logger.warning(f"Failed to decrypt token from {client_id}: {e}")
                     return
                 if not validate_token(token,self.config.token):
                     logger.warning(f"Invalid token from {client_id}")
