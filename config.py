@@ -68,9 +68,6 @@ class ServerConfig:
         self.websocket_path=config["server"].get("websocket_path","/ws")
         self.token=config["auth"]["token"]
         self.port_mappings=parse_port_mappings(config["tunnels"]["ports"])
-        self.max_connections_per_client=config["security"].get("max_connections_per_client",100)
-        self.connection_timeout=config["security"].get("connection_timeout",300)
-        self.allowed_destinations=config["security"].get("allowed_destinations",["0.0.0.0/0"])
         self.log_level=config["logging"].get("level","info")
         self.log_file=config["logging"].get("file","/var/log/ghostwire-server.log")
 
@@ -86,5 +83,8 @@ class ClientConfig:
         self.cloudflare_ips=config["cloudflare"].get("ips",[])
         self.cloudflare_host=config["cloudflare"].get("host","")
         self.cloudflare_check_interval=config["cloudflare"].get("check_interval",300)
+        self.max_connections=config["security"].get("max_connections",100)
+        self.connection_timeout=config["security"].get("connection_timeout",300)
+        self.allowed_destinations=config["security"].get("allowed_destinations",["0.0.0.0/0"])
         self.log_level=config["logging"].get("level","info")
         self.log_file=config["logging"].get("file","/var/log/ghostwire-client.log")

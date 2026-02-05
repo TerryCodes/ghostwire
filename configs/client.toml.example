@@ -13,6 +13,11 @@ ips=[]
 host=""
 check_interval=300
 
+[security]
+max_connections=100
+connection_timeout=300
+allowed_destinations=["0.0.0.0/0"]
+
 [logging]
 level="info"
 file="/var/log/ghostwire-client.log"
