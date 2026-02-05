@@ -17,7 +17,9 @@ GhostWire is a WebSocket-based reverse tunnel system designed to help users in c
 
 ## Quick Start
 
-### Server (Uncensored Country)
+### Step 1: Install Server (Censored Country - e.g., Iran)
+
+The server runs in the **censored country** with a **public IP** that can receive incoming connections.
 
 ```bash
 wget https://github.com/frenchtoblerone54/ghostwire/releases/latest/download/install-server.sh
@@ -25,7 +27,11 @@ chmod +x install-server.sh
 sudo ./install-server.sh
 ```
 
-### Client (Censored Country)
+**Note:** Save the authentication token - you'll need it for the client!
+
+### Step 2: Install Client (Uncensored Country - e.g., Netherlands, USA)
+
+The client runs on a **VPS in an uncensored country** with unrestricted internet access.
 
 ```bash
 wget https://github.com/frenchtoblerone54/ghostwire/releases/latest/download/install-client.sh
@@ -33,15 +39,47 @@ chmod +x install-client.sh
 sudo ./install-client.sh
 ```
 
+Enter:
+- Server URL pointing to your Iran server (e.g., `wss://iran-server.com/ws`)
+- Authentication token from server
+- The client will connect TO the Iran server
+
+### Step 3: Use the Tunnel (In Iran)
+
+Users in Iran connect to the server's local ports (e.g., `localhost:8080`) and traffic is tunneled through to the NL client which makes the actual internet requests.
+
 ## Architecture
 
-**Reverse Tunnel**: Client in censored country connects OUT to server, which then listens on public ports. Traffic flows through the tunnel to the client, which makes outbound connections to internet destinations.
+**Reverse Tunnel for Bypassing Outbound Blocking:**
 
+Designed for scenarios where **censored countries block outbound connections** to foreign servers (e.g., Iran blocks connections to international websites).
+
+**Setup:**
+- **Server**: Runs in **censored country** (Iran) with public IP
+- **Client**: Runs in **uncensored country** (Netherlands) with unrestricted internet
+
+**Why This Works:**
+- Iran blocks **outbound** connections to foreign servers
+- But Iran server has **public IP** and can receive **inbound** WebSocket connections
+- NL client connects **TO** Iran server (inbound to Iran = allowed ✅)
+- Once tunnel is established, traffic flows bidirectionally
+
+**Data Flow:**
 ```
-[User in Uncensored] --> [Server Port] --> [Server] <--WebSocket/HTTP2/TLS--> [Client in Censored] --> [Internet]
+[User in Iran] → [Server localhost:8080] → [Server Iran]
+                                              ↓ WebSocket Tunnel
+                                          [Client NL] → [Internet: Port 80/443]
 ```
 
-The client in the censored country acts as an **exit node** for traffic initiated on the server side.
+**Step-by-Step:**
+1. Client (NL) initiates WebSocket connection TO server (Iran)
+2. Server (Iran) listens on local ports (e.g., 8080) for users
+3. User in Iran connects to `localhost:8080`
+4. Traffic tunnels through WebSocket to NL client
+5. NL client makes actual connection to blocked websites
+6. Response travels back through tunnel to user in Iran
+
+**CloudFlare/DNS:** Points to **Iran server IP** (where WebSocket server listens for client connections)
 
 ## Port Mapping Syntax
 
@@ -63,6 +101,8 @@ ports=[
 ## Configuration
 
 ### Server Configuration (`/etc/ghostwire/server.toml`)
+
+**Location:** Censored country (Iran) - has public IP, listens for client connections
 
 ```toml
 [server]
@@ -87,6 +127,8 @@ file="/var/log/ghostwire-server.log"
 ```
 
 ### Client Configuration (`/etc/ghostwire/client.toml`)
+
+**Location:** Uncensored country (Netherlands) - connects TO server, makes internet requests
 
 ```toml
 [server]
