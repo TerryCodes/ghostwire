@@ -6,7 +6,10 @@ echo "Building GhostWire binaries in Docker..."
 cd "$(dirname "$0")/.."
 
 echo "Building Docker image..."
-docker build -t ghostwire-builder -f build/Dockerfile .
+docker build \
+  --build-arg HTTP_PROXY=${HTTP_PROXY:-} \
+  --build-arg HTTPS_PROXY=${HTTPS_PROXY:-} \
+  -t ghostwire-builder -f build/Dockerfile .
 
 echo "Building binaries..."
 docker run --rm -v "$(pwd):/build" ghostwire-builder bash -c "
