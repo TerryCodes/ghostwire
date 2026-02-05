@@ -83,9 +83,23 @@ class TunnelManager:
     def remove_connection(self,conn_id):
         conn=self.connections.pop(conn_id,None)
         if conn:
-            conn.close()
+            try:
+                if isinstance(conn,tuple):
+                    _,writer=conn
+                    writer.close()
+                else:
+                    conn.close()
+            except:
+                pass
 
     def close_all(self):
         for conn in list(self.connections.values()):
-            conn.close()
+            try:
+                if isinstance(conn,tuple):
+                    _,writer=conn
+                    writer.close()
+                else:
+                    conn.close()
+            except:
+                pass
         self.connections.clear()

@@ -4,6 +4,7 @@ import logging
 import signal
 import sys
 import time
+import struct
 import argparse
 import websockets
 from protocol import *
@@ -23,7 +24,7 @@ class GhostWireServer:
         self.tunnel_manager=TunnelManager()
         self.listeners=[]
 
-    async def handle_client(self,websocket,path):
+    async def handle_client(self,websocket):
         client_id=f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
         logger.info(f"New connection from {client_id}")
         authenticated=False
@@ -61,6 +62,9 @@ class GhostWireServer:
                     elif msg_type==MSG_ERROR:
                         logger.error(f"Client error for {conn_id}: {payload.decode()}")
                         self.tunnel_manager.remove_connection(conn_id)
+                    elif msg_type==MSG_PING:
+                        timestamp=struct.unpack("!Q",payload)[0]
+                        await self.websocket.send(pack_pong(timestamp,self.key))
                     elif msg_type==MSG_PONG:
                         pass
         except websockets.exceptions.ConnectionClosed:
@@ -82,6 +86,10 @@ class GhostWireServer:
         self.tunnel_manager.add_connection(conn_id,(reader,writer))
         logger.info(f"New local connection {conn_id} -> {remote_ip}:{remote_port}")
         try:
+            if not self.websocket:
+                logger.error(f"No client connected, dropping connection {conn_id}")
+                self.tunnel_manager.remove_connection(conn_id)
+                return
             connect_msg=pack_connect(conn_id,remote_ip,remote_port,self.key)
             await self.websocket.send(connect_msg)
             asyncio.create_task(self.forward_local_to_websocket(conn_id,reader))
