@@ -5,6 +5,8 @@ __pycache__/
 .Python
 build/
 !build/build.sh
+!build/build-docker.sh
+!build/Dockerfile
 develop-eggs/
 dist/
 downloads/
