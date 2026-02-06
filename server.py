@@ -23,18 +23,19 @@ class GhostWireServer:
         self.key=None
         self.tunnel_manager=TunnelManager()
         self.listeners=[]
-        self.send_queue=asyncio.Queue(maxsize=10000)
+        self.send_queue=None
         self.shutdown_event=asyncio.Event()
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
 
-    async def sender_task(self,websocket):
+    async def sender_task(self,websocket,send_queue,stop_event):
         try:
-            while True:
-                message=await self.send_queue.get()
-                if message is None:
-                    break
-                await websocket.send(message)
+            while not stop_event.is_set():
+                try:
+                    message=await asyncio.wait_for(send_queue.get(),timeout=0.1)
+                    await websocket.send(message)
+                except asyncio.TimeoutError:
+                    continue
         except Exception as e:
             logger.debug(f"Sender task error: {e}")
     async def handle_client(self,websocket):
@@ -42,6 +43,8 @@ class GhostWireServer:
         logger.info(f"New connection from {client_id}")
         authenticated=False
         sender=None
+        send_queue=asyncio.Queue(maxsize=10000)
+        stop_event=asyncio.Event()
         try:
             pubkey_msg=pack_pubkey(self.public_key)
             await websocket.send(pubkey_msg)
@@ -66,12 +69,8 @@ class GhostWireServer:
                 self.key=derive_key(token)
                 logger.info(f"Client {client_id} authenticated")
                 self.websocket=websocket
-                while not self.send_queue.empty():
-                    try:
-                        self.send_queue.get_nowait()
-                    except:
-                        break
-                sender=asyncio.create_task(self.sender_task(websocket))
+                self.send_queue=send_queue
+                sender=asyncio.create_task(self.sender_task(websocket,send_queue,stop_event))
                 if not self.listeners:
                     await self.start_listeners()
             async for message in websocket:
@@ -103,12 +102,13 @@ class GhostWireServer:
             logger.error(f"Error handling client {client_id}: {e}",exc_info=True)
         finally:
             if sender:
-                await self.send_queue.put(None)
+                stop_event.set()
                 try:
                     await asyncio.wait_for(sender,timeout=2)
                 except:
                     sender.cancel()
             self.websocket=None
+            self.send_queue=None
             self.tunnel_manager.close_all()
 
     async def start_listeners(self):

@@ -21,17 +21,18 @@ class GhostWireClient:
         self.key=None
         self.running=False
         self.reconnect_delay=config.initial_delay
-        self.send_queue=asyncio.Queue(maxsize=10000)
+        self.send_queue=None
         self.shutdown_event=asyncio.Event()
 
-    async def sender_task(self):
+    async def sender_task(self,send_queue,stop_event):
         try:
-            while True:
-                message=await self.send_queue.get()
-                if message is None:
-                    break
-                if self.websocket:
-                    await self.websocket.send(message)
+            while not stop_event.is_set():
+                try:
+                    message=await asyncio.wait_for(send_queue.get(),timeout=0.1)
+                    if self.websocket:
+                        await self.websocket.send(message)
+                except asyncio.TimeoutError:
+                    continue
         except Exception as e:
             logger.debug(f"Sender task error: {e}")
     async def connect(self):
@@ -169,20 +170,18 @@ class GhostWireClient:
         self.running=True
         while self.running and not self.shutdown_event.is_set():
             if await self.connect():
+                send_queue=asyncio.Queue(maxsize=10000)
+                stop_event=asyncio.Event()
+                self.send_queue=send_queue
                 try:
-                    while not self.send_queue.empty():
-                        try:
-                            self.send_queue.get_nowait()
-                        except:
-                            break
-                    sender_task=asyncio.create_task(self.sender_task())
+                    sender_task=asyncio.create_task(self.sender_task(send_queue,stop_event))
                     ping_task=asyncio.create_task(self.ping_loop())
                     receive_task=asyncio.create_task(self.receive_messages())
                     shutdown_task=asyncio.create_task(self.shutdown_event.wait())
                     done,pending=await asyncio.wait({receive_task,shutdown_task},return_when=asyncio.FIRST_COMPLETED)
                     for task in pending:
                         task.cancel()
-                    await self.send_queue.put(None)
+                    stop_event.set()
                     try:
                         await asyncio.wait_for(sender_task,timeout=2)
                     except:
@@ -195,6 +194,7 @@ class GhostWireClient:
                 finally:
                     if self.websocket:
                         await self.websocket.close()
+                    self.send_queue=None
                     self.tunnel_manager.close_all()
             if self.running and not self.shutdown_event.is_set():
                 logger.info(f"Reconnecting in {self.reconnect_delay} seconds...")
