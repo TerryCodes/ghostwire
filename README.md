@@ -117,6 +117,7 @@ ports=[
 listen_host="0.0.0.0"
 listen_port=8443
 websocket_path="/ws"
+auto_update=true
 
 [auth]
 token="V1StGXR8_Z5jdHi6B-my"
@@ -137,6 +138,7 @@ file="/var/log/ghostwire-server.log"
 [server]
 url="wss://tunnel.example.com/ws"
 token="V1StGXR8_Z5jdHi6B-my"
+auto_update=true
 
 [reconnect]
 initial_delay=1
