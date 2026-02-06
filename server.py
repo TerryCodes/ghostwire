@@ -26,6 +26,8 @@ class GhostWireServer:
         self.listeners=[]
         self.send_queue=None
         self.shutdown_event=asyncio.Event()
+        self.last_ping_time=0
+        self.ping_timeout=45
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
         self.updater=Updater("server")
@@ -40,13 +42,17 @@ class GhostWireServer:
                     continue
         except Exception as e:
             logger.debug(f"Sender task error: {e}")
+        finally:
+            logger.debug("Sender task stopped")
     async def handle_client(self,websocket):
         client_id=f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
         logger.info(f"New connection from {client_id}")
         authenticated=False
         sender=None
-        send_queue=asyncio.Queue(maxsize=10000)
+        ping_monitor=None
+        send_queue=asyncio.Queue(maxsize=50000)
         stop_event=asyncio.Event()
+        self.last_ping_time=time.time()
         try:
             pubkey_msg=pack_pubkey(self.public_key)
             await websocket.send(pubkey_msg)
@@ -73,9 +79,11 @@ class GhostWireServer:
                 self.websocket=websocket
                 self.send_queue=send_queue
                 sender=asyncio.create_task(self.sender_task(websocket,send_queue,stop_event))
+                ping_monitor=asyncio.create_task(self.ping_monitor_loop())
                 if not self.listeners:
                     await self.start_listeners()
             async for message in websocket:
+                self.last_ping_time=time.time()
                 buffer+=message
                 while len(buffer)>=9:
                     try:
@@ -111,9 +119,20 @@ class GhostWireServer:
                     await asyncio.wait_for(sender,timeout=2)
                 except:
                     sender.cancel()
+            if ping_monitor:
+                ping_monitor.cancel()
             self.websocket=None
             self.send_queue=None
             self.tunnel_manager.close_all()
+
+    async def ping_monitor_loop(self):
+        while self.running and not self.shutdown_event.is_set():
+            await asyncio.sleep(15)
+            if time.time()-self.last_ping_time>self.ping_timeout:
+                logger.warning("Client ping timeout, closing connection")
+                if self.websocket:
+                    await self.websocket.close()
+                break
 
     async def start_listeners(self):
         for local_ip,local_port,remote_ip,remote_port in self.config.port_mappings:
@@ -151,7 +170,7 @@ class GhostWireServer:
     async def forward_local_to_websocket(self,conn_id,reader):
         try:
             while True:
-                data=await reader.read(65536)
+                data=await reader.read(131072)
                 if not data:
                     break
                 if not self.websocket or not self.send_queue:
@@ -159,7 +178,7 @@ class GhostWireServer:
                     break
                 message=pack_data(conn_id,data,self.key)
                 try:
-                    self.send_queue.put_nowait(message)
+                    await self.send_queue.put(message)
                 except (asyncio.QueueFull,AttributeError):
                     logger.warning(f"Send queue unavailable, stopping forward for {conn_id}")
                     break

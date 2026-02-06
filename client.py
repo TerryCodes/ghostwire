@@ -4,6 +4,7 @@ import logging
 import signal
 import sys
 import time
+import struct
 import argparse
 import websockets
 from protocol import *
@@ -24,6 +25,10 @@ class GhostWireClient:
         self.reconnect_delay=config.initial_delay
         self.send_queue=None
         self.shutdown_event=asyncio.Event()
+        self.last_ping_time=0
+        self.last_pong_time=0
+        self.ping_interval=30
+        self.ping_timeout=45
         self.updater=Updater("client")
 
     async def sender_task(self,send_queue,stop_event):
@@ -37,6 +42,8 @@ class GhostWireClient:
                     continue
         except Exception as e:
             logger.debug(f"Sender task error: {e}")
+        finally:
+            logger.debug("Sender task stopped")
     async def connect(self):
         try:
             server_url=self.config.server_url
@@ -45,7 +52,7 @@ class GhostWireClient:
                 if best_ip:
                     server_url=self.config.server_url.replace(self.config.cloudflare_host,best_ip)
                     logger.info(f"Using CloudFlare IP: {best_ip}")
-            self.websocket=await websockets.connect(server_url,max_size=None,ping_interval=None)
+            self.websocket=await websockets.connect(server_url,max_size=None,ping_interval=None,close_timeout=5)
             pubkey_msg=await asyncio.wait_for(self.websocket.recv(),timeout=10)
             if len(pubkey_msg)<9:
                 raise ValueError("Invalid public key message")
@@ -56,6 +63,8 @@ class GhostWireClient:
             auth_msg=pack_auth_message(self.config.token,server_public_key)
             await self.websocket.send(auth_msg)
             self.key=derive_key(self.config.token)
+            self.last_ping_time=time.time()
+            self.last_pong_time=time.time()
             logger.info("Connected and authenticated to server")
             self.reconnect_delay=self.config.initial_delay
             return True
@@ -98,7 +107,7 @@ class GhostWireClient:
     async def forward_remote_to_websocket(self,conn_id,reader):
         try:
             while True:
-                data=await reader.read(65536)
+                data=await reader.read(131072)
                 if not data:
                     break
                 if not self.send_queue:
@@ -106,7 +115,7 @@ class GhostWireClient:
                     break
                 message=pack_data(conn_id,data,self.key)
                 try:
-                    self.send_queue.put_nowait(message)
+                    await self.send_queue.put(message)
                 except (asyncio.QueueFull,AttributeError):
                     logger.warning(f"Send queue unavailable, stopping forward for {conn_id}")
                     break
@@ -124,6 +133,7 @@ class GhostWireClient:
         buffer=b""
         try:
             async for message in self.websocket:
+                self.last_ping_time=time.time()
                 buffer+=message
                 while len(buffer)>=9:
                     try:
@@ -141,6 +151,14 @@ class GhostWireClient:
                     elif msg_type==MSG_ERROR:
                         logger.error(f"Server error for {conn_id}: {payload.decode()}")
                         self.tunnel_manager.remove_connection(conn_id)
+                    elif msg_type==MSG_PING:
+                        timestamp=struct.unpack("!Q",payload)[0]
+                        self.last_pong_time=time.time()
+                        try:
+                            if self.send_queue:
+                                self.send_queue.put_nowait(pack_pong(timestamp,self.key))
+                        except (asyncio.QueueFull,AttributeError):
+                            pass
                     elif msg_type==MSG_PONG:
                         pass
         except websockets.exceptions.ConnectionClosed:
@@ -162,7 +180,7 @@ class GhostWireClient:
     async def ping_loop(self):
         while self.running:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(self.ping_interval)
                 if self.websocket and self.send_queue:
                     timestamp=int(time.time()*1000)
                     try:
@@ -173,17 +191,28 @@ class GhostWireClient:
                 logger.debug(f"Ping error: {e}")
                 break
 
+    async def ping_timeout_monitor(self):
+        while self.running and self.websocket:
+            await asyncio.sleep(15)
+            now=time.time()
+            if now-self.last_ping_time>self.ping_timeout:
+                logger.warning("Server ping timeout, closing connection")
+                if self.websocket:
+                    await self.websocket.close()
+                break
+
     async def run(self):
         self.running=True
         update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
         while self.running and not self.shutdown_event.is_set():
             if await self.connect():
-                send_queue=asyncio.Queue(maxsize=10000)
+                send_queue=asyncio.Queue(maxsize=50000)
                 stop_event=asyncio.Event()
                 self.send_queue=send_queue
                 try:
                     sender_task=asyncio.create_task(self.sender_task(send_queue,stop_event))
                     ping_task=asyncio.create_task(self.ping_loop())
+                    timeout_monitor=asyncio.create_task(self.ping_timeout_monitor())
                     receive_task=asyncio.create_task(self.receive_messages())
                     shutdown_task=asyncio.create_task(self.shutdown_event.wait())
                     done,pending=await asyncio.wait({receive_task,shutdown_task},return_when=asyncio.FIRST_COMPLETED)
@@ -195,13 +224,17 @@ class GhostWireClient:
                     except:
                         sender_task.cancel()
                     ping_task.cancel()
+                    timeout_monitor.cancel()
                     if shutdown_task in done:
                         break
                 except Exception as e:
                     logger.error(f"Runtime error: {e}")
                 finally:
                     if self.websocket:
-                        await self.websocket.close()
+                        try:
+                            await asyncio.wait_for(self.websocket.close(),timeout=2)
+                        except:
+                            pass
                     self.send_queue=None
                     self.tunnel_manager.close_all()
             if self.running and not self.shutdown_event.is_set():
