@@ -91,11 +91,13 @@ class GhostWireServer:
                     elif msg_type==MSG_PING:
                         timestamp=struct.unpack("!Q",payload)[0]
                         try:
-                            self.send_queue.put_nowait(pack_pong(timestamp,self.key))
+                            send_queue.put_nowait(pack_pong(timestamp,self.key))
                         except asyncio.QueueFull:
                             logger.warning(f"Send queue full, dropping PONG")
                     elif msg_type==MSG_PONG:
                         pass
+        except asyncio.TimeoutError:
+            logger.warning(f"Client {client_id} authentication timeout")
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client {client_id} disconnected")
         except Exception as e:
@@ -122,26 +124,27 @@ class GhostWireServer:
         self.tunnel_manager.add_connection(conn_id,(reader,writer))
         logger.info(f"New local connection {conn_id} -> {remote_ip}:{remote_port}")
         try:
-            if not self.websocket:
+            if not self.websocket or not self.send_queue:
                 logger.error(f"No client connected, dropping connection {conn_id}")
                 self.tunnel_manager.remove_connection(conn_id)
+                writer.close()
+                await writer.wait_closed()
                 return
-            if self.websocket:
-                connect_msg=pack_connect(conn_id,remote_ip,remote_port,self.key)
-                try:
-                    self.send_queue.put_nowait(connect_msg)
-                except asyncio.QueueFull:
-                    logger.error(f"Send queue full, dropping connection {conn_id}")
-                    self.tunnel_manager.remove_connection(conn_id)
-                    return
-            else:
-                logger.error(f"Client disconnected before sending CONNECT for {conn_id}")
+            connect_msg=pack_connect(conn_id,remote_ip,remote_port,self.key)
+            try:
+                self.send_queue.put_nowait(connect_msg)
+            except (asyncio.QueueFull,AttributeError):
+                logger.error(f"Send queue unavailable, dropping connection {conn_id}")
                 self.tunnel_manager.remove_connection(conn_id)
+                writer.close()
+                await writer.wait_closed()
                 return
             asyncio.create_task(self.forward_local_to_websocket(conn_id,reader))
         except Exception as e:
             logger.error(f"Error sending CONNECT: {e}")
             self.tunnel_manager.remove_connection(conn_id)
+            writer.close()
+            await writer.wait_closed()
 
     async def forward_local_to_websocket(self,conn_id,reader):
         try:
@@ -149,20 +152,20 @@ class GhostWireServer:
                 data=await reader.read(65536)
                 if not data:
                     break
-                if not self.websocket:
+                if not self.websocket or not self.send_queue:
                     logger.debug(f"Client disconnected, stopping forward for {conn_id}")
                     break
                 message=pack_data(conn_id,data,self.key)
                 try:
                     self.send_queue.put_nowait(message)
-                except asyncio.QueueFull:
-                    logger.warning(f"Send queue full, dropping data for {conn_id}")
+                except (asyncio.QueueFull,AttributeError):
+                    logger.warning(f"Send queue unavailable, stopping forward for {conn_id}")
                     break
         except Exception as e:
             logger.debug(f"Forward error for {conn_id}: {e}")
         finally:
             try:
-                if self.websocket:
+                if self.websocket and self.send_queue:
                     self.send_queue.put_nowait(pack_close(conn_id,0,self.key))
             except:
                 pass
