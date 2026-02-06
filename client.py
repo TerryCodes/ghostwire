@@ -22,6 +22,7 @@ class GhostWireClient:
         self.running=False
         self.reconnect_delay=config.initial_delay
         self.send_lock=asyncio.Lock()
+        self.shutdown_event=asyncio.Event()
 
     async def connect(self):
         try:
@@ -150,29 +151,41 @@ class GhostWireClient:
 
     async def run(self):
         self.running=True
-        while self.running:
+        while self.running and not self.shutdown_event.is_set():
             if await self.connect():
                 try:
                     ping_task=asyncio.create_task(self.ping_loop())
-                    await self.receive_messages()
+                    receive_task=asyncio.create_task(self.receive_messages())
+                    shutdown_task=asyncio.create_task(self.shutdown_event.wait())
+                    done,pending=await asyncio.wait({receive_task,shutdown_task},return_when=asyncio.FIRST_COMPLETED)
+                    for task in pending:
+                        task.cancel()
                     ping_task.cancel()
+                    if shutdown_task in done:
+                        break
                 except Exception as e:
                     logger.error(f"Runtime error: {e}")
                 finally:
                     if self.websocket:
                         await self.websocket.close()
                     self.tunnel_manager.close_all()
-            if self.running:
+            if self.running and not self.shutdown_event.is_set():
                 logger.info(f"Reconnecting in {self.reconnect_delay} seconds...")
-                await asyncio.sleep(self.reconnect_delay)
+                try:
+                    await asyncio.wait_for(self.shutdown_event.wait(),timeout=self.reconnect_delay)
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 self.reconnect_delay=min(self.reconnect_delay*self.config.multiplier,self.config.max_delay)
+        logger.info("Client shutting down")
 
     def stop(self):
         self.running=False
+        self.shutdown_event.set()
 
-def signal_handler(client):
+def signal_handler(client,loop):
     logger.info("Received shutdown signal")
-    client.stop()
+    loop.call_soon_threadsafe(client.stop)
 
 def main():
     parser=argparse.ArgumentParser(description="GhostWire Client")
@@ -195,7 +208,7 @@ def main():
     loop=asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     for sig in (signal.SIGTERM,signal.SIGINT):
-        loop.add_signal_handler(sig,lambda:signal_handler(client))
+        loop.add_signal_handler(sig,lambda:signal_handler(client,loop))
     try:
         loop.run_until_complete(client.run())
     except KeyboardInterrupt:

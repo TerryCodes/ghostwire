@@ -24,6 +24,7 @@ class GhostWireServer:
         self.tunnel_manager=TunnelManager()
         self.listeners=[]
         self.send_lock=asyncio.Lock()
+        self.shutdown_event=asyncio.Event()
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
 
@@ -147,14 +148,16 @@ class GhostWireServer:
         self.running=True
         logger.info(f"Starting GhostWire server on {self.config.listen_host}:{self.config.listen_port}")
         async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,ping_interval=None):
-            await asyncio.Future()
+            await self.shutdown_event.wait()
+        logger.info("Server shutting down")
 
     def stop(self):
         self.running=False
+        self.shutdown_event.set()
 
-def signal_handler(server):
+def signal_handler(server,loop):
     logger.info("Received shutdown signal")
-    server.stop()
+    loop.call_soon_threadsafe(server.stop)
 
 def main():
     parser=argparse.ArgumentParser(description="GhostWire Server")
@@ -177,7 +180,7 @@ def main():
     loop=asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     for sig in (signal.SIGTERM,signal.SIGINT):
-        loop.add_signal_handler(sig,lambda:signal_handler(server))
+        loop.add_signal_handler(sig,lambda:signal_handler(server,loop))
     try:
         loop.run_until_complete(server.start())
     except KeyboardInterrupt:
