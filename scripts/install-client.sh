@@ -74,7 +74,7 @@ fi
 echo "Configuring sudoers for auto-update..."
 if [ ! -f /etc/sudoers.d/ghostwire ]; then
     cat > /etc/sudoers.d/ghostwire <<EOF
-ghostwire ALL=(ALL) NOPASSWD: /bin/bash -c /tmp/ghostwire-update/*.sh
+ghostwire ALL=(ALL) NOPASSWD: /bin/mv /usr/local/bin/ghostwire-*
 EOF
     chmod 440 /etc/sudoers.d/ghostwire
 fi
