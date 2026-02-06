@@ -1,6 +1,7 @@
 [server]
 url="wss://tunnel.example.com/ws"
 token="REPLACE_WITH_SERVER_TOKEN"
+auto_update=true
 
 [reconnect]
 initial_delay=1

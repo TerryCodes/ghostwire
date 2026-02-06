@@ -70,6 +70,7 @@ class ServerConfig:
         self.port_mappings=parse_port_mappings(config["tunnels"]["ports"])
         self.log_level=config["logging"].get("level","info")
         self.log_file=config["logging"].get("file","/var/log/ghostwire-server.log")
+        self.auto_update=config["server"].get("auto_update",True)
 
 class ClientConfig:
     def __init__(self,config_path):
@@ -85,3 +86,4 @@ class ClientConfig:
         self.cloudflare_check_interval=config["cloudflare"].get("check_interval",300)
         self.log_level=config["logging"].get("level","info")
         self.log_file=config["logging"].get("file","/var/log/ghostwire-client.log")
+        self.auto_update=config["server"].get("auto_update",True)

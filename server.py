@@ -210,10 +210,13 @@ class GhostWireServer:
     async def start(self):
         self.running=True
         logger.info(f"Starting GhostWire server on {self.config.listen_host}:{self.config.listen_port}")
-        update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
+        update_task=None
+        if self.config.auto_update:
+            update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
         async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,ping_interval=None):
             await self.shutdown_event.wait()
-        update_task.cancel()
+        if update_task:
+            update_task.cancel()
         logger.info("Server shutting down")
 
     def stop(self):

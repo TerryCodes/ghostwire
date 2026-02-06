@@ -203,7 +203,9 @@ class GhostWireClient:
 
     async def run(self):
         self.running=True
-        update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
+        update_task=None
+        if self.config.auto_update:
+            update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
         while self.running and not self.shutdown_event.is_set():
             if await self.connect():
                 send_queue=asyncio.Queue(maxsize=50000)
@@ -245,7 +247,8 @@ class GhostWireClient:
                 except asyncio.TimeoutError:
                     pass
                 self.reconnect_delay=min(self.reconnect_delay*self.config.multiplier,self.config.max_delay)
-        update_task.cancel()
+        if update_task:
+            update_task.cancel()
         logger.info("Client shutting down")
 
     def stop(self):

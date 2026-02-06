@@ -54,11 +54,21 @@ if [ ! -f /etc/ghostwire/server.toml ]; then
     read -p "  Local port to listen on (e.g., 8080): " LOCAL_PORT
     read -p "  Remote destination to forward to (e.g., 80 or 1.1.1.1:443): " REMOTE_DEST
 
+    echo ""
+    read -p "  Enable auto-update? [Y/n]: " AUTO_UPDATE
+    AUTO_UPDATE=${AUTO_UPDATE:-y}
+    if [[ $AUTO_UPDATE =~ ^[Yy]$ ]]; then
+        AUTO_UPDATE="true"
+    else
+        AUTO_UPDATE="false"
+    fi
+
     cat > /etc/ghostwire/server.toml <<EOF
 [server]
 listen_host="${WS_HOST}"
 listen_port=${WS_PORT}
 websocket_path="/ws"
+auto_update=${AUTO_UPDATE}
 
 [auth]
 token="${TOKEN}"

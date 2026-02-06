@@ -41,11 +41,19 @@ mkdir -p /etc/ghostwire
 if [ ! -f /etc/ghostwire/client.toml ]; then
     read -p "Enter server URL (e.g., wss://tunnel.example.com/ws): " SERVER_URL
     read -p "Enter authentication token: " TOKEN
+    read -p "Enable auto-update? [Y/n]: " AUTO_UPDATE
+    AUTO_UPDATE=${AUTO_UPDATE:-y}
+    if [[ $AUTO_UPDATE =~ ^[Yy]$ ]]; then
+        AUTO_UPDATE="true"
+    else
+        AUTO_UPDATE="false"
+    fi
 
     cat > /etc/ghostwire/client.toml <<EOF
 [server]
 url="${SERVER_URL}"
 token="${TOKEN}"
+auto_update=${AUTO_UPDATE}
 
 [reconnect]
 initial_delay=1
