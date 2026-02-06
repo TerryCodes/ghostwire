@@ -127,6 +127,26 @@ server {
     location /.well-known/acme-challenge/ {
         root /var/www/html;
     }
+}
+EOF
+
+    ln -sf /etc/nginx/sites-available/ghostwire /etc/nginx/sites-enabled/
+    nginx -t && systemctl reload nginx
+
+    read -p "Generate TLS certificate with Let's Encrypt? [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        certbot --nginx -d ${DOMAIN}
+    fi
+
+    cat > /etc/nginx/sites-available/ghostwire <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
 
     location / {
         return 301 https://\$server_name\$request_uri;
@@ -160,15 +180,7 @@ server {
 }
 EOF
 
-    ln -sf /etc/nginx/sites-available/ghostwire /etc/nginx/sites-enabled/
-
-    read -p "Generate TLS certificate with Let's Encrypt? [y/N] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        certbot certonly --nginx -d ${DOMAIN}
-    fi
-
-    systemctl restart nginx
+    systemctl reload nginx
     echo "nginx configured for ${DOMAIN}"
 else
     echo "Skipping nginx setup. Example configuration available at /usr/share/doc/ghostwire/nginx.conf.example"
