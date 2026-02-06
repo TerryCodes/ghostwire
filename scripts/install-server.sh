@@ -92,6 +92,12 @@ if ! id -u ghostwire >/dev/null 2>&1; then
     useradd -r -s /bin/false ghostwire
 fi
 
+echo "Configuring sudoers for auto-update..."
+cat > /etc/sudoers.d/ghostwire <<EOF
+ghostwire ALL=(ALL) NOPASSWD: /bin/bash -c /tmp/ghostwire-update/*.sh
+EOF
+chmod 440 /etc/sudoers.d/ghostwire
+
 echo "Installing systemd service..."
 cat > /etc/systemd/system/ghostwire-server.service <<EOF
 [Unit]
