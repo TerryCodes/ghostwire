@@ -11,6 +11,7 @@ from protocol import *
 from config import ServerConfig
 from auth import validate_token
 from tunnel import TunnelManager
+from updater import Updater
 
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s")
 logger=logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class GhostWireServer:
         self.shutdown_event=asyncio.Event()
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
+        self.updater=Updater("server")
 
     async def sender_task(self,websocket,send_queue,stop_event):
         try:
@@ -189,8 +191,10 @@ class GhostWireServer:
     async def start(self):
         self.running=True
         logger.info(f"Starting GhostWire server on {self.config.listen_host}:{self.config.listen_port}")
+        update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
         async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,ping_interval=None):
             await self.shutdown_event.wait()
+        update_task.cancel()
         logger.info("Server shutting down")
 
     def stop(self):

@@ -9,6 +9,7 @@ import websockets
 from protocol import *
 from config import ClientConfig
 from tunnel import TunnelManager
+from updater import Updater
 
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s")
 logger=logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class GhostWireClient:
         self.reconnect_delay=config.initial_delay
         self.send_queue=None
         self.shutdown_event=asyncio.Event()
+        self.updater=Updater("client")
 
     async def sender_task(self,send_queue,stop_event):
         try:
@@ -173,6 +175,7 @@ class GhostWireClient:
 
     async def run(self):
         self.running=True
+        update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
         while self.running and not self.shutdown_event.is_set():
             if await self.connect():
                 send_queue=asyncio.Queue(maxsize=10000)
@@ -209,6 +212,7 @@ class GhostWireClient:
                 except asyncio.TimeoutError:
                     pass
                 self.reconnect_delay=min(self.reconnect_delay*self.config.multiplier,self.config.max_delay)
+        update_task.cancel()
         logger.info("Client shutting down")
 
     def stop(self):
