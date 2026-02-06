@@ -23,7 +23,7 @@ class Updater:
     def get_current_version(self):
         script_path=Path(sys.argv[0])
         if script_path.name.startswith(f"ghostwire-{self.component_name}"):
-            return "v0.2.0"
+            return "v0.2.1"
         return "dev"
 
     async def check_for_update(self):
@@ -80,16 +80,29 @@ class Updater:
                     logger.info("Checksum verified")
                 else:
                     logger.warning("Could not download checksum, skipping verification")
-                executable_path=sys.argv[0]
-                backup_path=f"{executable_path}.old"
-                if os.path.exists(executable_path):
-                    if os.path.exists(backup_path):
-                        os.remove(backup_path)
-                    os.rename(executable_path,backup_path)
                 import shutil
-                shutil.move(binary_path,executable_path)
-                logger.info(f"Successfully updated to {new_version}, restarting...")
-                os.execv(executable_path,[executable_path]+sys.argv[1:])
+                update_script_path=os.path.join(tmpdir,"apply_update.sh")
+                executable_path=sys.argv[0]
+                with open(update_script_path,"w") as f:
+                    f.write(f"""#!/bin/bash
+set -e
+sleep 1
+if [ -f "{executable_path}.old" ]; then
+    rm -f "{executable_path}.old"
+fi
+if [ -f "{executable_path}" ]; then
+    mv "{executable_path}" "{executable_path}.old"
+fi
+mv "{binary_path}" "{executable_path}"
+systemctl restart ghostwire-{self.component_name}
+rm -f "{update_script_path}"
+""")
+                os.chmod(update_script_path,0o755)
+                logger.info(f"Update downloaded for {new_version}, will apply on restart")
+                import subprocess
+                subprocess.Popen(["/bin/bash",update_script_path],start_new_session=True)
+                await asyncio.sleep(2)
+                logger.info("Initiating graceful shutdown for update...")
                 return True
         except Exception as e:
             logger.error(f"Error downloading update: {e}",exc_info=True)
