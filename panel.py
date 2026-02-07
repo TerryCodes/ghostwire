@@ -15,14 +15,12 @@ app=Flask(__name__)
 
 panel_config=None
 server_start_time=time.time()
+_routes=[]
 
 def panel_route(path="",methods=["GET"]):
     def decorator(func):
-        @app.route(f"/<path:panel_path>{path}",methods=methods)
-        @functools.wraps(func)
-        def wrapper(panel_path,*args,**kwargs):
-            return func(*args,**kwargs)
-        return wrapper
+        _routes.append((path,methods,func))
+        return func
     return decorator
 
 def _get_frontend_dir():
@@ -125,12 +123,13 @@ def get_system_info():
 
 @app.before_request
 def check_prefix():
-    if not request.path.startswith(f"/{panel_config.panel_path}"):
+    if panel_config.panel_path and not request.path.startswith(f"/{panel_config.panel_path}"):
         return Response("",status=404)
 
 @panel_route("/")
 def index():
-    return _load_html().replace("{{prefix}}",f"/{panel_config.panel_path}")
+    prefix=f"/{panel_config.panel_path}" if panel_config.panel_path else ""
+    return _load_html().replace("{{prefix}}",prefix)
 
 @panel_route("/api/status")
 def api_status():
@@ -200,9 +199,19 @@ def start_panel(config):
     panel_config=config
     if not config.panel_enabled:
         return
+    _register_routes()
     def run():
         print(f"Starting web panel on {config.panel_host}:{config.panel_port}")
         print(f"Access panel at: http://{config.panel_host}:{config.panel_port}/{config.panel_path}/")
         serve(app,host=config.panel_host,port=config.panel_port,threads=4)
     thread=threading.Thread(target=run,daemon=True)
     thread.start()
+
+def _register_routes():
+    if panel_config.panel_path:
+        route_prefix=f"/<path:panel_path>{''}"
+    else:
+        route_prefix=""
+    for path,methods,func in _routes:
+        full_path=f"{route_prefix}{path}" if route_prefix else path
+        app.add_url_rule(full_path,func.__name__,func,methods=methods)
