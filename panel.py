@@ -9,7 +9,6 @@ from flask import Flask,request,jsonify,Response
 from waitress import serve
 
 app=Flask(__name__)
-app.secret_key=os.urandom(24)
 
 panel_config=None
 server_start_time=time.time()
