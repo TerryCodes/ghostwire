@@ -4,7 +4,10 @@ import subprocess
 import sys
 import threading
 import time
+import functools
 import psutil
+import tomllib
+import toml
 from flask import Flask,request,jsonify,Response
 from waitress import serve
 
@@ -12,6 +15,15 @@ app=Flask(__name__)
 
 panel_config=None
 server_start_time=time.time()
+
+def panel_route(path="",methods=["GET"]):
+    def decorator(func):
+        @app.route(f"/<path:panel_path>{path}",methods=methods)
+        @functools.wraps(func)
+        def wrapper(panel_path,*args,**kwargs):
+            return func(*args,**kwargs)
+        return wrapper
+    return decorator
 
 def _get_frontend_dir():
     if getattr(sys,"_MEIPASS",None):
@@ -46,12 +58,10 @@ def get_os_uptime():
         return "N/A"
 
 def read_config():
-    import tomllib
     with open("/etc/ghostwire/server.toml","rb") as f:
         return tomllib.load(f)
 
 def write_config(config):
-    import toml
     with open("/etc/ghostwire/server.toml","w") as f:
         toml.dump(config,f)
 
@@ -118,36 +128,36 @@ def check_prefix():
     if not request.path.startswith(f"/{panel_config.panel_path}"):
         return Response("",status=404)
 
-@app.route(f"/<path:panel_path>/")
-def index(panel_path):
-    return _load_html().replace("{{prefix}}",f"/{panel_path}")
+@panel_route("/")
+def index():
+    return _load_html().replace("{{prefix}}",f"/{panel_config.panel_path}")
 
-@app.route(f"/<path:panel_path>/api/status")
-def api_status(panel_path):
+@panel_route("/api/status")
+def api_status():
     connected=get_connection_status()
     config=read_config()
     tunnel_count=len(config["tunnels"]["ports"])
     return jsonify({"connected":connected,"uptime":get_uptime(),"tunnel_count":tunnel_count,"os_uptime":get_os_uptime()})
 
-@app.route(f"/<path:panel_path>/api/system")
-def api_system(panel_path):
+@panel_route("/api/system")
+def api_system():
     return jsonify(get_system_info())
 
-@app.route(f"/<path:panel_path>/api/tunnels")
-def api_tunnels(panel_path):
+@panel_route("/api/tunnels")
+def api_tunnels():
     config=read_config()
     return jsonify(config["tunnels"]["ports"])
 
-@app.route(f"/<path:panel_path>/api/tunnels",methods=["POST"])
-def api_add_tunnel(panel_path):
+@panel_route("/api/tunnels",methods=["POST"])
+def api_add_tunnel():
     data=request.json
     config=read_config()
     config["tunnels"]["ports"].append(data["tunnel"])
     write_config(config)
     return jsonify({"success":True})
 
-@app.route(f"/<path:panel_path>/api/tunnels/<int:index>",methods=["DELETE"])
-def api_remove_tunnel(panel_path,index):
+@panel_route("/api/tunnels/<int:index>",methods=["DELETE"])
+def api_remove_tunnel(index):
     config=read_config()
     if 0<=index<len(config["tunnels"]["ports"]):
         config["tunnels"]["ports"].pop(index)
@@ -155,16 +165,15 @@ def api_remove_tunnel(panel_path,index):
         return jsonify({"success":True})
     return jsonify({"success":False}),400
 
-@app.route(f"/<path:panel_path>/api/config")
-def api_get_config(panel_path):
+@panel_route("/api/config")
+def api_get_config():
     with open("/etc/ghostwire/server.toml","r") as f:
         return f.read()
 
-@app.route(f"/<path:panel_path>/api/config",methods=["POST"])
-def api_save_config(panel_path):
+@panel_route("/api/config",methods=["POST"])
+def api_save_config():
     try:
         config_text=request.data.decode()
-        import tomllib
         tomllib.loads(config_text)
         with open("/etc/ghostwire/server.toml","w") as f:
             f.write(config_text)
@@ -172,17 +181,17 @@ def api_save_config(panel_path):
     except Exception as e:
         return jsonify({"success":False,"error":str(e)}),400
 
-@app.route(f"/<path:panel_path>/api/logs")
-def api_logs(panel_path):
+@panel_route("/api/logs")
+def api_logs():
     return tail_log(200)
 
-@app.route(f"/<path:panel_path>/api/restart",methods=["POST"])
-def api_restart(panel_path):
+@panel_route("/api/restart",methods=["POST"])
+def api_restart():
     success=restart_service()
     return jsonify({"success":success})
 
-@app.route(f"/<path:panel_path>/api/stop",methods=["POST"])
-def api_stop(panel_path):
+@panel_route("/api/stop",methods=["POST"])
+def api_stop():
     success=stop_service()
     return jsonify({"success":success})
 

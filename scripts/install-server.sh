@@ -178,8 +178,9 @@ fi
 
 echo "Configuring sudoers for auto-update and panel..."
 cat > /etc/sudoers.d/ghostwire <<EOF
-ghostwire ALL=(ALL) NOPASSWD: /bin/mv /usr/local/bin/ghostwire-*
+ghostwire ALL=(ALL) NOPASSWD: /usr/bin/mv /usr/local/bin/ghostwire-*
 ghostwire ALL=(ALL) NOPASSWD: /bin/systemctl restart ghostwire-server
+ghostwire ALL=(ALL) NOPASSWD: /bin/systemctl stop ghostwire-server
 EOF
 chmod 440 /etc/sudoers.d/ghostwire
 
