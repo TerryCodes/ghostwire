@@ -329,7 +329,7 @@ EOF
         fi
     fi
 else
-    echo "Skipping nginx setup. Example configuration available at /usr/share/doc/ghostwire/nginx.conf.example"
+    echo "Skipping nginx setup. Example configuration available at the GitHub repository README."
 fi
 
 echo "Enabling and starting GhostWire server..."
