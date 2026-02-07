@@ -113,12 +113,12 @@ if ! id -u ghostwire >/dev/null 2>&1; then
 fi
 
 echo "Configuring sudoers for auto-update..."
-if [ ! -f /etc/sudoers.d/ghostwire ]; then
-    cat > /etc/sudoers.d/ghostwire <<EOF
-ghostwire ALL=(ALL) NOPASSWD: /bin/mv /usr/local/bin/ghostwire-*
+cat > /etc/sudoers.d/ghostwire <<EOF
+ghostwire ALL=(ALL) NOPASSWD: /usr/bin/mv /usr/local/bin/ghostwire-*
+ghostwire ALL=(ALL) NOPASSWD: /bin/systemctl restart ghostwire-server
+ghostwire ALL=(ALL) NOPASSWD: /bin/systemctl stop ghostwire-server
 EOF
-    chmod 440 /etc/sudoers.d/ghostwire
-fi
+chmod 440 /etc/sudoers.d/ghostwire
 
 echo "Installing systemd service..."
 cat > /etc/systemd/system/ghostwire-client.service <<EOF
