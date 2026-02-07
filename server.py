@@ -7,11 +7,13 @@ import time
 import struct
 import argparse
 import websockets
+from http import HTTPStatus
 from protocol import *
 from config import ServerConfig
 from auth import validate_token
 from tunnel import TunnelManager
 from updater import Updater
+from panel import start_panel
 
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s")
 logger=logging.getLogger(__name__)
@@ -207,13 +209,17 @@ class GhostWireServer:
         logger.info(f"CLOSE from client: {conn_id}")
         self.tunnel_manager.remove_connection(conn_id)
 
+    async def process_request(self,connection,request):
+        if request.path!=self.config.websocket_path:
+            return connection.respond(HTTPStatus.NOT_FOUND,"")
     async def start(self):
         self.running=True
         logger.info(f"Starting GhostWire server on {self.config.listen_host}:{self.config.listen_port}")
+        start_panel(self.config)
         update_task=None
         if self.config.auto_update:
             update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
-        async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,ping_interval=None):
+        async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,ping_interval=None,process_request=self.process_request):
             await self.shutdown_event.wait()
         if update_task:
             update_task.cancel()

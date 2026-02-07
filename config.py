@@ -71,6 +71,10 @@ class ServerConfig:
         self.log_level=config["logging"].get("level","info")
         self.log_file=config["logging"].get("file","/var/log/ghostwire-server.log")
         self.auto_update=config["server"].get("auto_update",True)
+        self.panel_enabled=config.get("panel",{}).get("enabled",False)
+        self.panel_host=config.get("panel",{}).get("host","127.0.0.1")
+        self.panel_port=config.get("panel",{}).get("port",9090)
+        self.panel_path=config.get("panel",{}).get("path","")
 
 class ClientConfig:
     def __init__(self,config_path):

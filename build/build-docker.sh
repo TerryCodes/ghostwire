@@ -18,7 +18,7 @@ docker build $BUILD_ARGS -t ghostwire-builder -f build/Dockerfile .
 echo "Building binaries..."
 docker run --rm -v "$(pwd):/build" ghostwire-builder bash -c "
 cd /build
-python3.13 -m PyInstaller --onefile --name ghostwire-server server.py
+python3.13 -m PyInstaller --onefile --name ghostwire-server --add-data 'frontend:frontend' server.py
 python3.13 -m PyInstaller --onefile --name ghostwire-client client.py
 "
 

@@ -39,14 +39,47 @@ echo "Creating configuration directory..."
 mkdir -p /etc/ghostwire
 
 if [ ! -f /etc/ghostwire/client.toml ]; then
-    read -p "Enter server URL (e.g., wss://tunnel.example.com/ws): " SERVER_URL
-    read -p "Enter authentication token: " TOKEN
+    echo ""
+    echo "Client Configuration"
+    echo "===================="
+    while true; do
+        read -p "Server URL (e.g., wss://tunnel.example.com/ws): " SERVER_URL
+        if [ -z "$SERVER_URL" ]; then
+            echo "❌ This field is required"
+            continue
+        fi
+        if [[ ! "$SERVER_URL" =~ ^wss?:// ]]; then
+            echo "❌ URL must start with ws:// or wss://"
+            continue
+        fi
+        break
+    done
+    while true; do
+        read -p "Authentication token: " TOKEN
+        if [ -z "$TOKEN" ]; then
+            echo "❌ This field is required"
+            continue
+        fi
+        break
+    done
     read -p "Enable auto-update? [Y/n]: " AUTO_UPDATE
     AUTO_UPDATE=${AUTO_UPDATE:-y}
     if [[ $AUTO_UPDATE =~ ^[Yy]$ ]]; then
         AUTO_UPDATE="true"
     else
         AUTO_UPDATE="false"
+    fi
+    echo ""
+    echo "Configuration Summary:"
+    echo "  Server URL: ${SERVER_URL}"
+    echo "  Token: ${TOKEN:0:10}..."
+    echo "  Auto-update: ${AUTO_UPDATE}"
+    echo ""
+    read -p "Confirm and save configuration? [Y/n]: " CONFIRM
+    CONFIRM=${CONFIRM:-y}
+    if [[ ! $CONFIRM =~ ^[Yy]$ ]]; then
+        echo "Installation cancelled"
+        exit 1
     fi
 
     cat > /etc/ghostwire/client.toml <<EOF
@@ -120,6 +153,9 @@ echo "Installation complete!"
 echo ""
 echo "Client is running and listening on configured ports"
 echo "Configuration: /etc/ghostwire/client.toml"
+echo ""
+echo "💡 Tip: If connection is unreliable, enable CloudFlare proxy"
+echo "   for your domain to improve stability and reduce latency."
 echo ""
 echo "Useful commands:"
 echo "  sudo systemctl status ghostwire-client"

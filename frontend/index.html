@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>GhostWire Panel</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+--bg:#1a1d2e;
+--bg-sidebar:#1a1d2e;
+--bg-card:#252738;
+--bg-card-hover:#2a2d42;
+--text:#c3c8d8;
+--text-muted:#6b7280;
+--accent:#00e5a0;
+--accent-dim:rgba(0,229,160,0.15);
+--accent-border:rgba(0,229,160,0.3);
+--danger:#ef4444;
+--danger-dim:rgba(239,68,68,0.15);
+--border:#2e3148;
+--radius:8px;
+}
+body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);line-height:1.5;display:flex;min-height:100vh;overflow-x:hidden}
+.sidebar{width:200px;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;transition:transform 0.3s}
+.sidebar-header{padding:20px;border-bottom:1px solid var(--border)}
+.sidebar-header h2{font-size:1.1em;font-weight:800;color:#fff;letter-spacing:-0.3px}
+.sidebar-header span{font-size:0.75em;color:var(--text-muted);font-weight:600}
+.sidebar-nav{flex:1;padding:12px 8px}
+.nav-item{display:flex;align-items:center;gap:12px;padding:11px 16px;border-radius:var(--radius);cursor:pointer;font-size:0.9em;font-weight:600;color:var(--text-muted);transition:all 0.2s;margin-bottom:2px;border:none;background:none;width:100%;text-align:left}
+.nav-item:hover{color:var(--text);background:rgba(255,255,255,0.04)}
+.nav-item.active{color:#fff;background:var(--accent);border-left:none}
+.nav-item svg{width:18px;height:18px;flex-shrink:0}
+.sidebar-footer{padding:16px;border-top:1px solid var(--border)}
+.sidebar-toggle{position:fixed;bottom:20px;left:180px;width:28px;height:28px;background:var(--bg-card);border:1px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text-muted);z-index:101;transition:all 0.3s}
+.sidebar-toggle:hover{color:var(--accent)}
+.main{flex:1;margin-left:200px;min-height:100vh;transition:margin-left 0.3s}
+.main-content{padding:24px 28px;max-width:1400px}
+.page{display:none}
+.page.active{display:block}
+.gauges{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:24px}
+.gauge-card{background:var(--bg-card);border-radius:var(--radius);padding:24px 20px;display:flex;flex-direction:column;align-items:center;border:1px solid var(--border)}
+.gauge-svg{width:120px;height:120px;position:relative}
+.gauge-svg circle{fill:none;stroke-width:8;stroke-linecap:round}
+.gauge-bg{stroke:var(--border)}
+.gauge-fill{transition:stroke-dashoffset 0.8s ease}
+.gauge-text{font-size:1.4em;font-weight:800;fill:#fff}
+.gauge-label{margin-top:12px;font-size:0.82em;color:var(--text-muted);text-align:center;font-weight:600}
+.cards-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.card{background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden}
+.card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.card-header h3{font-size:0.95em;font-weight:700;color:#fff}
+.card-body{padding:16px 20px}
+.card-actions{display:flex;gap:0;border-top:1px solid var(--border)}
+.card-action{flex:1;padding:12px;text-align:center;font-size:0.82em;font-weight:600;color:var(--text-muted);cursor:pointer;background:none;border:none;border-right:1px solid var(--border);transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:6px}
+.card-action:last-child{border-right:none}
+.card-action:hover{color:var(--accent);background:rgba(0,229,160,0.05)}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.status-dot.online{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.status-dot.offline{background:var(--danger);box-shadow:0 0 8px var(--danger)}
+.badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:0.78em;font-weight:700;border:1px solid}
+.badge-accent{color:var(--accent);border-color:var(--accent-border);background:var(--accent-dim)}
+.badge-danger{color:var(--danger);border-color:rgba(239,68,68,0.3);background:var(--danger-dim)}
+.badge-muted{color:var(--text-muted);border-color:var(--border);background:rgba(255,255,255,0.03)}
+.badges{display:flex;gap:8px;flex-wrap:wrap}
+.speed-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.speed-label{font-size:0.82em;color:var(--text-muted);font-weight:600;margin-bottom:4px}
+.speed-value{font-size:1.1em;font-weight:800;color:#fff;display:flex;align-items:center;gap:6px}
+.speed-value .arrow{color:var(--accent);font-size:0.9em}
+.tunnel-table{width:100%;border-collapse:collapse}
+.tunnel-table th{text-align:left;padding:12px 16px;font-size:0.8em;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)}
+.tunnel-table td{padding:12px 16px;border-bottom:1px solid var(--border);font-size:0.9em}
+.tunnel-table tr:hover{background:rgba(255,255,255,0.02)}
+.tunnel-spec{font-family:'Courier New',monospace;color:var(--accent);font-weight:700}
+.add-form{display:flex;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border);align-items:center}
+.add-form input{flex:1;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:#fff;font-size:0.88em;font-family:'Nunito',sans-serif;font-weight:600}
+.add-form input:focus{outline:none;border-color:var(--accent)}
+.add-form input::placeholder{color:var(--text-muted)}
+.btn{padding:10px 20px;border-radius:var(--radius);border:none;font-size:0.85em;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;transition:all 0.2s}
+.btn-accent{background:var(--accent);color:#1a1d2e}
+.btn-accent:hover{background:#00cc8e;transform:translateY(-1px)}
+.btn-danger{background:transparent;color:var(--danger);border:1px solid rgba(239,68,68,0.3)}
+.btn-danger:hover{background:var(--danger-dim)}
+.btn-ghost{background:transparent;color:var(--text-muted);border:1px solid var(--border)}
+.btn-ghost:hover{color:#fff;border-color:var(--text)}
+.config-editor{width:100%;min-height:500px;padding:20px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:#fff;font-family:'Courier New',monospace;font-size:0.88em;resize:vertical;line-height:1.6}
+.config-editor:focus{outline:none;border-color:var(--accent)}
+.config-actions{display:flex;gap:10px;margin-top:16px}
+.log-viewer{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:20px;font-family:'Courier New',monospace;font-size:0.82em;max-height:600px;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;color:var(--text-muted);line-height:1.8}
+.log-actions{display:flex;gap:10px;margin-bottom:16px;align-items:center}
+.log-actions select{padding:8px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:#fff;font-family:'Nunito',sans-serif;font-size:0.85em;font-weight:600}
+.alert-bar{padding:14px 20px;border-radius:var(--radius);margin-bottom:16px;font-weight:600;font-size:0.88em;display:none;align-items:center;gap:10px;animation:slideIn 0.3s ease}
+.alert-bar.show{display:flex}
+.alert-bar.success{background:var(--accent-dim);border:1px solid var(--accent-border);color:var(--accent)}
+.alert-bar.error{background:var(--danger-dim);border:1px solid rgba(239,68,68,0.3);color:var(--danger)}
+@keyframes slideIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.version-tag{font-size:0.7em;color:var(--accent);font-weight:700;margin-left:6px}
+@media(max-width:900px){
+.sidebar{transform:translateX(-100%)}
+.sidebar.open{transform:translateX(0)}
+.main{margin-left:0}
+.gauges{grid-template-columns:repeat(2,1fr)}
+.cards-grid{grid-template-columns:1fr}
+}
+@media(max-width:600px){
+.gauges{grid-template-columns:1fr 1fr}
+.add-form{flex-direction:column}
+}
+</style>
+</head>
+<body>
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-header">
+<h2>GhostWire<span class="version-tag">v0.1</span></h2>
+<span>Management Panel</span>
+</div>
+<nav class="sidebar-nav">
+<button class="nav-item active" onclick="switchPage('overview',this)">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+Overview
+</button>
+<button class="nav-item" onclick="switchPage('tunnels',this)">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>
+Tunnels
+</button>
+<button class="nav-item" onclick="switchPage('config',this)">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+Configuration
+</button>
+<button class="nav-item" onclick="switchPage('logs',this)">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+Logs
+</button>
+</nav>
+<div class="sidebar-footer">
+<button class="nav-item" onclick="location.reload()">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+Refresh
+</button>
+</div>
+</aside>
+<main class="main">
+<div class="main-content">
+<div class="page active" id="page-overview">
+<div class="gauges">
+<div class="gauge-card">
+<svg class="gauge-svg" viewBox="0 0 120 120">
+<circle class="gauge-bg" cx="60" cy="60" r="50" stroke-dasharray="314" stroke-dashoffset="0" transform="rotate(-90 60 60)"/>
+<circle class="gauge-fill" id="gauge-cpu" cx="60" cy="60" r="50" stroke="var(--accent)" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)"/>
+<text class="gauge-text" x="60" y="63" text-anchor="middle" id="gauge-cpu-text">0%</text>
+</svg>
+<div class="gauge-label">CPU: <span id="cpu-cores">-</span> Cores</div>
+</div>
+<div class="gauge-card">
+<svg class="gauge-svg" viewBox="0 0 120 120">
+<circle class="gauge-bg" cx="60" cy="60" r="50" stroke-dasharray="314" stroke-dashoffset="0" transform="rotate(-90 60 60)"/>
+<circle class="gauge-fill" id="gauge-ram" cx="60" cy="60" r="50" stroke="var(--accent)" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)"/>
+<text class="gauge-text" x="60" y="63" text-anchor="middle" id="gauge-ram-text">0%</text>
+</svg>
+<div class="gauge-label">RAM: <span id="ram-info">-</span></div>
+</div>
+<div class="gauge-card">
+<svg class="gauge-svg" viewBox="0 0 120 120">
+<circle class="gauge-bg" cx="60" cy="60" r="50" stroke-dasharray="314" stroke-dashoffset="0" transform="rotate(-90 60 60)"/>
+<circle class="gauge-fill" id="gauge-swap" cx="60" cy="60" r="50" stroke="var(--accent)" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)"/>
+<text class="gauge-text" x="60" y="63" text-anchor="middle" id="gauge-swap-text">0%</text>
+</svg>
+<div class="gauge-label">Swap: <span id="swap-info">-</span></div>
+</div>
+<div class="gauge-card">
+<svg class="gauge-svg" viewBox="0 0 120 120">
+<circle class="gauge-bg" cx="60" cy="60" r="50" stroke-dasharray="314" stroke-dashoffset="0" transform="rotate(-90 60 60)"/>
+<circle class="gauge-fill" id="gauge-disk" cx="60" cy="60" r="50" stroke="var(--accent)" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)"/>
+<text class="gauge-text" x="60" y="63" text-anchor="middle" id="gauge-disk-text">0%</text>
+</svg>
+<div class="gauge-label">Storage: <span id="disk-info">-</span></div>
+</div>
+</div>
+<div class="cards-grid">
+<div class="card">
+<div class="card-header">
+<h3>GhostWire</h3>
+<div><span class="status-dot" id="svc-dot"></span> <span id="svc-status" style="font-size:0.88em;font-weight:700">...</span></div>
+</div>
+<div class="card-actions">
+<button class="card-action" onclick="switchPage('logs',document.querySelectorAll('.nav-item')[3])"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Logs</button>
+<button class="card-action" onclick="stopService()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg> Stop</button>
+<button class="card-action" onclick="restartService()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg> Restart</button>
+</div>
+</div>
+<div class="card">
+<div class="card-header"><h3>Manage</h3></div>
+<div class="card-actions">
+<button class="card-action" onclick="switchPage('logs',document.querySelectorAll('.nav-item')[3])"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Logs</button>
+<button class="card-action" onclick="switchPage('config',document.querySelectorAll('.nav-item')[2])"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Config</button>
+<button class="card-action" onclick="switchPage('tunnels',document.querySelectorAll('.nav-item')[1])"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg> Tunnels</button>
+</div>
+</div>
+</div>
+<div class="cards-grid">
+<div class="card">
+<div class="card-header"><h3>Uptime</h3></div>
+<div class="card-body">
+<div class="badges">
+<span class="badge badge-accent" id="uptime-gw">GhostWire: -</span>
+<span class="badge badge-accent" id="uptime-os">OS: -</span>
+</div>
+</div>
+</div>
+<div class="card">
+<div class="card-header"><h3>System Load</h3></div>
+<div class="card-body">
+<div class="badges">
+<span class="badge badge-accent" id="load-avg">-</span>
+</div>
+</div>
+</div>
+</div>
+<div class="cards-grid">
+<div class="card">
+<div class="card-header"><h3>Network Speed</h3></div>
+<div class="card-body">
+<div class="speed-grid">
+<div>
+<div class="speed-label">Upload</div>
+<div class="speed-value"><span class="arrow">&uarr;</span> <span id="speed-up">0 B/s</span></div>
+</div>
+<div>
+<div class="speed-label">Download</div>
+<div class="speed-value"><span class="arrow">&darr;</span> <span id="speed-down">0 B/s</span></div>
+</div>
+</div>
+</div>
+</div>
+<div class="card">
+<div class="card-header"><h3>Total Data</h3></div>
+<div class="card-body">
+<div class="speed-grid">
+<div>
+<div class="speed-label">Sent</div>
+<div class="speed-value"><span class="arrow">&uarr;</span> <span id="total-sent">0 B</span></div>
+</div>
+<div>
+<div class="speed-label">Received</div>
+<div class="speed-value"><span class="arrow">&darr;</span> <span id="total-recv">0 B</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="cards-grid">
+<div class="card">
+<div class="card-header"><h3>Active Tunnels</h3></div>
+<div class="card-body">
+<div class="badges" id="tunnel-badges"></div>
+</div>
+</div>
+<div class="card">
+<div class="card-header"><h3>Connection Info</h3></div>
+<div class="card-body">
+<div class="badges" id="conn-badges">
+<span class="badge badge-muted">Tunnels: <span id="tunnel-count-overview">0</span></span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="page" id="page-tunnels">
+<div id="tunnel-alert" class="alert-bar"></div>
+<div class="card">
+<div class="card-header"><h3>Tunnel Management</h3></div>
+<div class="add-form">
+<input type="text" id="new-local" placeholder="Local port (e.g., 8080 or 8000-8010)">
+<input type="text" id="new-remote" placeholder="Remote (e.g., 80 or 1.1.1.1:443)">
+<button class="btn btn-accent" onclick="addTunnel()">+ Add</button>
+</div>
+<table class="tunnel-table">
+<thead><tr><th>#</th><th>Mapping</th><th>Local</th><th>Remote</th><th></th></tr></thead>
+<tbody id="tunnel-tbody"></tbody>
+</table>
+</div>
+</div>
+<div class="page" id="page-config">
+<div id="config-alert" class="alert-bar"></div>
+<div class="card">
+<div class="card-header"><h3>Server Configuration</h3></div>
+<div class="card-body">
+<textarea class="config-editor" id="config-editor" spellcheck="false"></textarea>
+<div class="config-actions">
+<button class="btn btn-accent" onclick="saveConfig()">Save Configuration</button>
+<button class="btn btn-ghost" onclick="loadConfig()">Reload</button>
+</div>
+</div>
+</div>
+</div>
+<div class="page" id="page-logs">
+<div class="card">
+<div class="card-header">
+<h3>Server Logs</h3>
+<div class="log-actions">
+<button class="btn btn-ghost" onclick="loadLogs()" style="padding:6px 14px;font-size:0.82em">Refresh</button>
+</div>
+</div>
+<div class="card-body" style="padding:0">
+<div class="log-viewer" id="log-viewer" style="border:none;border-radius:0">Loading logs...</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<script>
+const API="{{prefix}}";
+let prevNet={sent:0,recv:0,time:Date.now()};
+function switchPage(name,btn){
+document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
+document.querySelectorAll(".nav-item").forEach(n=>n.classList.remove("active"));
+document.getElementById("page-"+name).classList.add("active");
+if(btn)btn.classList.add("active");
+if(name==="logs")loadLogs();
+else if(name==="config")loadConfig();
+else if(name==="tunnels")loadTunnels();
+}
+function setGauge(id,pct){
+const c=document.getElementById(id);
+const offset=314-(314*Math.min(pct,100)/100);
+c.setAttribute("stroke-dashoffset",offset);
+const color=pct>85?"#ef4444":pct>60?"#f59e0b":"var(--accent)";
+c.setAttribute("stroke",color);
+}
+function fmtBytes(b){
+if(b<1024)return b+" B";
+if(b<1048576)return (b/1024).toFixed(2)+" KB";
+if(b<1073741824)return (b/1048576).toFixed(2)+" MB";
+return (b/1073741824).toFixed(2)+" GB";
+}
+function fmtSpeed(b){
+if(b<1024)return b.toFixed(0)+" B/s";
+if(b<1048576)return (b/1024).toFixed(2)+" KB/s";
+return (b/1048576).toFixed(2)+" MB/s";
+}
+function fmtMB(mb){
+if(mb<1024)return mb.toFixed(0)+" MB";
+return (mb/1024).toFixed(2)+" GB";
+}
+async function refreshData(){
+try{
+const[status,sys,tunnels]=await Promise.all([
+fetch(API+"/api/status").then(r=>r.json()),
+fetch(API+"/api/system").then(r=>r.json()),
+fetch(API+"/api/tunnels").then(r=>r.json())
+]);
+setGauge("gauge-cpu",sys.cpu_percent);
+document.getElementById("gauge-cpu-text").textContent=sys.cpu_percent+"%";
+document.getElementById("cpu-cores").textContent=sys.cpu_count;
+setGauge("gauge-ram",sys.ram_percent);
+document.getElementById("gauge-ram-text").textContent=sys.ram_percent+"%";
+document.getElementById("ram-info").textContent=fmtMB(sys.ram_used)+" / "+fmtMB(sys.ram_total);
+setGauge("gauge-swap",sys.swap_percent);
+document.getElementById("gauge-swap-text").textContent=sys.swap_percent+"%";
+document.getElementById("swap-info").textContent=fmtMB(sys.swap_used)+" / "+fmtMB(sys.swap_total);
+setGauge("gauge-disk",sys.disk_percent);
+document.getElementById("gauge-disk-text").textContent=sys.disk_percent+"%";
+document.getElementById("disk-info").textContent=sys.disk_used+" GB / "+sys.disk_total+" GB";
+const dot=document.getElementById("svc-dot");
+const stxt=document.getElementById("svc-status");
+dot.className=status.connected?"status-dot online":"status-dot offline";
+stxt.textContent=status.connected?"Running":"Stopped";
+stxt.style.color=status.connected?"var(--accent)":"var(--danger)";
+document.getElementById("uptime-gw").textContent="GhostWire: "+status.uptime;
+document.getElementById("uptime-os").textContent="OS: "+status.os_uptime;
+document.getElementById("load-avg").textContent=sys.load_1+" | "+sys.load_5+" | "+sys.load_15;
+const now=Date.now();
+const dt=(now-prevNet.time)/1000;
+if(dt>0&&prevNet.sent>0){
+document.getElementById("speed-up").textContent=fmtSpeed((sys.net_sent-prevNet.sent)/dt);
+document.getElementById("speed-down").textContent=fmtSpeed((sys.net_recv-prevNet.recv)/dt);
+}
+prevNet={sent:sys.net_sent,recv:sys.net_recv,time:now};
+document.getElementById("total-sent").textContent=fmtBytes(sys.net_sent);
+document.getElementById("total-recv").textContent=fmtBytes(sys.net_recv);
+document.getElementById("tunnel-count-overview").textContent=tunnels.length;
+document.getElementById("tunnel-badges").innerHTML=tunnels.map(t=>'<span class="badge badge-accent">'+t+'</span>').join("");
+}catch(e){console.error(e)}
+}
+async function loadTunnels(){
+const tunnels=await fetch(API+"/api/tunnels").then(r=>r.json());
+document.getElementById("tunnel-tbody").innerHTML=tunnels.map((t,i)=>{
+const parts=t.split("=");
+return `<tr>
+<td style="color:var(--text-muted)">${i+1}</td>
+<td><span class="tunnel-spec">${t}</span></td>
+<td>${parts[0]||"-"}</td>
+<td>${parts[1]||parts[0]}</td>
+<td style="text-align:right"><button class="btn btn-danger" style="padding:5px 12px;font-size:0.78em" onclick="removeTunnel(${i})">Remove</button></td>
+</tr>`;
+}).join("");
+}
+async function addTunnel(){
+const local=document.getElementById("new-local").value.trim();
+const remote=document.getElementById("new-remote").value.trim();
+if(!local){showTunnelAlert("Local port is required","error");return}
+const spec=remote?local+"="+remote:local;
+const res=await fetch(API+"/api/tunnels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tunnel:spec})});
+if(res.ok){
+showTunnelAlert("Tunnel added. Restart server to apply.","success");
+document.getElementById("new-local").value="";
+document.getElementById("new-remote").value="";
+loadTunnels();refreshData();
+}else{showTunnelAlert("Failed to add tunnel","error")}
+}
+async function removeTunnel(i){
+if(!confirm("Remove this tunnel?"))return;
+const res=await fetch(API+"/api/tunnels/"+i,{method:"DELETE"});
+if(res.ok){showTunnelAlert("Tunnel removed. Restart to apply.","success");loadTunnels();refreshData()}
+else{showTunnelAlert("Failed to remove","error")}
+}
+async function loadConfig(){
+const config=await fetch(API+"/api/config").then(r=>r.text());
+document.getElementById("config-editor").value=config;
+}
+async function saveConfig(){
+const config=document.getElementById("config-editor").value;
+const res=await fetch(API+"/api/config",{method:"POST",headers:{"Content-Type":"text/plain"},body:config});
+if(res.ok){showConfigAlert("Configuration saved! Restart to apply.","success")}
+else{showConfigAlert("Invalid TOML syntax","error")}
+}
+async function loadLogs(){
+const logs=await fetch(API+"/api/logs").then(r=>r.text());
+const el=document.getElementById("log-viewer");
+el.textContent=logs;
+el.scrollTop=el.scrollHeight;
+}
+async function restartService(){
+if(!confirm("Restart GhostWire? All connections will drop."))return;
+await fetch(API+"/api/restart",{method:"POST"});
+setTimeout(refreshData,4000);
+}
+async function stopService(){
+if(!confirm("Stop GhostWire server?"))return;
+await fetch(API+"/api/stop",{method:"POST"});
+setTimeout(refreshData,2000);
+}
+function showTunnelAlert(msg,type){
+const el=document.getElementById("tunnel-alert");
+el.textContent=msg;el.className="alert-bar show "+type;
+setTimeout(()=>el.classList.remove("show"),4000);
+}
+function showConfigAlert(msg,type){
+const el=document.getElementById("config-alert");
+el.textContent=msg;el.className="alert-bar show "+type;
+setTimeout(()=>el.classList.remove("show"),4000);
+}
+refreshData();
+setInterval(refreshData,3000);
+</script>
+</body>
+</html>
