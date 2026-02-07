@@ -11,10 +11,12 @@ GhostWire is a WebSocket-based reverse tunnel system designed to help users in c
 - **Flexible TCP port forwarding** - Port ranges, IP binding, custom mappings
 - **Built-in heartbeat** - Transport and application-layer keepalive
 - **CloudFlare compatible** - Works behind TLS-terminating proxies
+- **Web management panel** - Real-time system monitoring, tunnel config, logs, service control
 - **nginx reverse proxy** - Production-ready setup with Let's Encrypt
 - **Compiled binaries** - Linux amd64 (Ubuntu 22.04+ compatible)
 - **systemd services** - Automated start, restart, logging
-- **Easy installation** - One-command setup scripts
+- **Auto-update** - Configurable automatic binary updates via GitHub releases
+- **Easy installation** - One-command setup scripts with interactive configuration
 
 ## Quick Start
 
@@ -125,10 +127,25 @@ token="V1StGXR8_Z5jdHi6B-my"
 [tunnels]
 ports=["8080=80", "8443=443"]
 
+[panel]
+enabled=true
+host="127.0.0.1"
+port=9090
+path="/aBcDeFgHiJkLmNoPqRsT"
+
 [logging]
 level="info"
 file="/var/log/ghostwire-server.log"
 ```
+
+**Web Management Panel:** The server includes an optional web-based management panel for:
+- Real-time system monitoring (CPU, RAM, disk, network usage)
+- Tunnel configuration and management
+- Log viewing
+- Service control (restart/stop)
+- Configuration editor
+
+The panel is accessible at `http://127.0.0.1:9090/{path}/` where `path` is a randomly generated nanoid. Access is restricted to localhost by default for security.
 
 ### Client Configuration (`/etc/ghostwire/client.toml`)
 
