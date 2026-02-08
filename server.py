@@ -36,8 +36,9 @@ class GhostWireServer:
         self.listeners=[]
         self.send_queue=None
         self.shutdown_event=asyncio.Event()
+        self.auth_lock=asyncio.Lock()
         self.last_ping_time=0
-        self.ping_timeout=60
+        self.ping_timeout=config.ping_timeout
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
         self.updater=Updater("server")
@@ -57,9 +58,6 @@ class GhostWireServer:
     async def handle_client(self,websocket):
         client_id=f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
         logger.info(f"New connection from {client_id}")
-        if self.websocket is not None:
-            logger.warning(f"Rejecting {client_id}: client already connected")
-            return
         authenticated=False
         sender=None
         ping_monitor=None
@@ -72,29 +70,33 @@ class GhostWireServer:
             buffer=b""
             auth_msg=await asyncio.wait_for(websocket.recv(),timeout=30)
             buffer+=auth_msg
-            if len(buffer)>=9:
-                msg_type,conn_id,encrypted_token,consumed=unpack_message(buffer,None)
-                buffer=buffer[consumed:]
-                if msg_type!=MSG_AUTH:
-                    logger.warning(f"Expected AUTH message from {client_id}")
+            async with self.auth_lock:
+                if self.websocket is not None:
+                    logger.warning(f"Rejecting {client_id}: client already connected")
                     return
-                try:
-                    token=rsa_decrypt(self.private_key,encrypted_token).decode()
-                except Exception as e:
-                    logger.warning(f"Failed to decrypt token from {client_id}: {e}")
-                    return
-                if not validate_token(token,self.config.token):
-                    logger.warning(f"Invalid token from {client_id}")
-                    return
-                authenticated=True
-                self.key=derive_key(token)
-                logger.info(f"Client {client_id} authenticated")
-                self.websocket=websocket
-                self.send_queue=send_queue
-                sender=asyncio.create_task(self.sender_task(websocket,send_queue,stop_event))
-                ping_monitor=asyncio.create_task(self.ping_monitor_loop())
-                if not self.listeners:
-                    await self.start_listeners()
+                if len(buffer)>=9:
+                    msg_type,conn_id,encrypted_token,consumed=unpack_message(buffer,None)
+                    buffer=buffer[consumed:]
+                    if msg_type!=MSG_AUTH:
+                        logger.warning(f"Expected AUTH message from {client_id}")
+                        return
+                    try:
+                        token=rsa_decrypt(self.private_key,encrypted_token).decode()
+                    except Exception as e:
+                        logger.warning(f"Failed to decrypt token from {client_id}: {e}")
+                        return
+                    if not validate_token(token,self.config.token):
+                        logger.warning(f"Invalid token from {client_id}")
+                        return
+                    authenticated=True
+                    self.key=derive_key(token)
+                    logger.info(f"Client {client_id} authenticated")
+                    self.websocket=websocket
+                    self.send_queue=send_queue
+                    sender=asyncio.create_task(self.sender_task(websocket,send_queue,stop_event))
+                    ping_monitor=asyncio.create_task(self.ping_monitor_loop())
+                    if not self.listeners:
+                        await self.start_listeners()
             async for message in websocket:
                 self.last_ping_time=time.time()
                 buffer+=message
@@ -140,8 +142,9 @@ class GhostWireServer:
                 self.tunnel_manager.close_all()
 
     async def ping_monitor_loop(self):
+        interval=max(2,self.ping_timeout//2)
         while self.running and not self.shutdown_event.is_set():
-            await asyncio.sleep(15)
+            await asyncio.sleep(interval)
             if time.time()-self.last_ping_time>self.ping_timeout:
                 logger.warning("Client ping timeout, closing connection")
                 if self.websocket:

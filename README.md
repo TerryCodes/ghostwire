@@ -119,6 +119,7 @@ ports=[
 listen_host="0.0.0.0"
 listen_port=8443
 websocket_path="/ws"
+ping_timeout=10
 auto_update=true
 
 [auth]

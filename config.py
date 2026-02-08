@@ -70,6 +70,7 @@ class ServerConfig:
         self.port_mappings=parse_port_mappings(config["tunnels"]["ports"])
         self.log_level=config["logging"].get("level","info")
         self.log_file=config["logging"].get("file","/var/log/ghostwire-server.log")
+        self.ping_timeout=config["server"].get("ping_timeout",10)
         self.auto_update=config["server"].get("auto_update",True)
         self.panel_enabled=config.get("panel",{}).get("enabled",False)
         self.panel_host=config.get("panel",{}).get("host","127.0.0.1")

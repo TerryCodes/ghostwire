@@ -128,6 +128,7 @@ path=\"${PANEL_PATH}\""
 listen_host="${WS_HOST}"
 listen_port=${WS_PORT}
 websocket_path="/ws"
+ping_timeout=10
 auto_update=${AUTO_UPDATE}
 
 [auth]
