@@ -161,9 +161,9 @@ class GhostWireClient:
                         break
                     if msg_type==MSG_CONNECT:
                         remote_ip,remote_port=unpack_connect(payload)
-                        asyncio.create_task(self.handle_connect(conn_id,remote_ip,remote_port))
+                        await self.handle_connect(conn_id,remote_ip,remote_port)
                     elif msg_type==MSG_DATA:
-                        asyncio.create_task(self.handle_data(conn_id,payload))
+                        await self.handle_data(conn_id,payload)
                     elif msg_type==MSG_CLOSE:
                         self.tunnel_manager.remove_connection(conn_id)
                     elif msg_type==MSG_ERROR:

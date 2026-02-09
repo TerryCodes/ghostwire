@@ -117,9 +117,9 @@ class GhostWireServer:
                     except ValueError:
                         break
                     if msg_type==MSG_DATA:
-                        asyncio.create_task(self.handle_data(conn_id,payload))
+                        await self.handle_data(conn_id,payload)
                     elif msg_type==MSG_CLOSE:
-                        asyncio.create_task(self.handle_close(conn_id))
+                        await self.handle_close(conn_id)
                     elif msg_type==MSG_ERROR:
                         logger.error(f"Client error for {conn_id}: {payload.decode()}")
                         self.tunnel_manager.remove_connection(conn_id)
