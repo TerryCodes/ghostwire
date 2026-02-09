@@ -299,7 +299,8 @@ Refresh
 <div class="card-header">
 <h3>Server Logs</h3>
 <div class="log-actions">
-<button class="btn btn-ghost" onclick="loadLogs()" style="padding:6px 14px;font-size:0.82em">Refresh</button>
+<button class="btn btn-ghost" onclick="toggleLiveLog()" id="log-toggle" style="padding:6px 14px;font-size:0.82em">▶ Start Live</button>
+<button class="btn btn-ghost" onclick="clearLogs()" style="padding:6px 14px;font-size:0.82em">Clear</button>
 </div>
 </div>
 <div class="card-body" style="padding:0">
@@ -317,8 +318,10 @@ document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
 document.querySelectorAll(".nav-item").forEach(n=>n.classList.remove("active"));
 document.getElementById("page-"+name).classList.add("active");
 if(btn)btn.classList.add("active");
-if(name==="logs")loadLogs();
-else if(name==="config")loadConfig();
+if(name==="logs"){
+if(logStream){logStream.close();logStream=null;liveLogging=false;document.getElementById("log-toggle").textContent="▶ Start Live"}
+loadLogs();
+}else if(name==="config")loadConfig();
 else if(name==="tunnels")loadTunnels();
 }
 function setGauge(id,pct){
@@ -343,46 +346,7 @@ function fmtMB(mb){
 if(mb<1024)return mb.toFixed(0)+" MB";
 return (mb/1024).toFixed(2)+" GB";
 }
-async function refreshData(){
-try{
-const[status,sys,tunnels]=await Promise.all([
-fetch(API+"/api/status").then(r=>r.json()),
-fetch(API+"/api/system").then(r=>r.json()),
-fetch(API+"/api/tunnels").then(r=>r.json())
-]);
-setGauge("gauge-cpu",sys.cpu_percent);
-document.getElementById("gauge-cpu-text").textContent=sys.cpu_percent+"%";
-document.getElementById("cpu-cores").textContent=sys.cpu_count;
-setGauge("gauge-ram",sys.ram_percent);
-document.getElementById("gauge-ram-text").textContent=sys.ram_percent+"%";
-document.getElementById("ram-info").textContent=fmtMB(sys.ram_used)+" / "+fmtMB(sys.ram_total);
-setGauge("gauge-swap",sys.swap_percent);
-document.getElementById("gauge-swap-text").textContent=sys.swap_percent+"%";
-document.getElementById("swap-info").textContent=fmtMB(sys.swap_used)+" / "+fmtMB(sys.swap_total);
-setGauge("gauge-disk",sys.disk_percent);
-document.getElementById("gauge-disk-text").textContent=sys.disk_percent+"%";
-document.getElementById("disk-info").textContent=sys.disk_used+" GB / "+sys.disk_total+" GB";
-const dot=document.getElementById("svc-dot");
-const stxt=document.getElementById("svc-status");
-dot.className=status.connected?"status-dot online":"status-dot offline";
-stxt.textContent=status.connected?"Running":"Stopped";
-stxt.style.color=status.connected?"var(--accent)":"var(--danger)";
-document.getElementById("uptime-gw").textContent="GhostWire: "+status.uptime;
-document.getElementById("uptime-os").textContent="OS: "+status.os_uptime;
-document.getElementById("load-avg").textContent=sys.load_1+" | "+sys.load_5+" | "+sys.load_15;
-const now=Date.now();
-const dt=(now-prevNet.time)/1000;
-if(dt>0&&prevNet.sent>0){
-document.getElementById("speed-up").textContent=fmtSpeed((sys.net_sent-prevNet.sent)/dt);
-document.getElementById("speed-down").textContent=fmtSpeed((sys.net_recv-prevNet.recv)/dt);
-}
-prevNet={sent:sys.net_sent,recv:sys.net_recv,time:now};
-document.getElementById("total-sent").textContent=fmtBytes(sys.net_sent);
-document.getElementById("total-recv").textContent=fmtBytes(sys.net_recv);
-document.getElementById("tunnel-count-overview").textContent=tunnels.length;
-document.getElementById("tunnel-badges").innerHTML=tunnels.map(t=>'<span class="badge badge-accent">'+t+'</span>').join("");
-}catch(e){console.error(e)}
-}
+async function refreshData(){}
 async function loadTunnels(){
 const tunnels=await fetch(API+"/api/tunnels").then(r=>r.json());
 document.getElementById("tunnel-tbody").innerHTML=tunnels.map((t,i)=>{
@@ -406,13 +370,13 @@ if(res.ok){
 showTunnelAlert("Tunnel added. Restart server to apply.","success");
 document.getElementById("new-local").value="";
 document.getElementById("new-remote").value="";
-loadTunnels();refreshData();
+loadTunnels();
 }else{showTunnelAlert("Failed to add tunnel","error")}
 }
 async function removeTunnel(i){
 if(!confirm("Remove this tunnel?"))return;
 const res=await fetch(API+"/api/tunnels/"+i,{method:"DELETE"});
-if(res.ok){showTunnelAlert("Tunnel removed. Restart to apply.","success");loadTunnels();refreshData()}
+if(res.ok){showTunnelAlert("Tunnel removed. Restart to apply.","success");loadTunnels()}
 else{showTunnelAlert("Failed to remove","error")}
 }
 async function loadConfig(){
@@ -425,21 +389,46 @@ const res=await fetch(API+"/api/config",{method:"POST",headers:{"Content-Type":"
 if(res.ok){showConfigAlert("Configuration saved! Restart to apply.","success")}
 else{showConfigAlert("Invalid TOML syntax","error")}
 }
+let logStream=null;
+let liveLogging=false;
 async function loadLogs(){
 const logs=await fetch(API+"/api/logs").then(r=>r.text());
 const el=document.getElementById("log-viewer");
 el.textContent=logs;
 el.scrollTop=el.scrollHeight;
 }
+function toggleLiveLog(){
+const btn=document.getElementById("log-toggle");
+if(liveLogging){
+if(logStream){logStream.close();logStream=null}
+liveLogging=false;
+btn.textContent="▶ Start Live";
+}else{
+liveLogging=true;
+btn.textContent="⏸ Stop Live";
+loadLogs();
+logStream=new EventSource(API+"/api/logs/stream");
+logStream.onmessage=function(e){
+const el=document.getElementById("log-viewer");
+el.textContent+=e.data;
+el.scrollTop=el.scrollHeight;
+};
+logStream.onerror=function(){
+liveLogging=false;
+btn.textContent="▶ Start Live";
+};
+}
+}
+function clearLogs(){
+document.getElementById("log-viewer").textContent="";
+}
 async function restartService(){
 if(!confirm("Restart GhostWire? All connections will drop."))return;
 await fetch(API+"/api/restart",{method:"POST"});
-setTimeout(refreshData,4000);
 }
 async function stopService(){
 if(!confirm("Stop GhostWire server?"))return;
 await fetch(API+"/api/stop",{method:"POST"});
-setTimeout(refreshData,2000);
 }
 function showTunnelAlert(msg,type){
 const el=document.getElementById("tunnel-alert");
@@ -452,7 +441,41 @@ el.textContent=msg;el.className="alert-bar show "+type;
 setTimeout(()=>el.classList.remove("show"),4000);
 }
 refreshData();
-setInterval(refreshData,3000);
+const evtSource=new EventSource(API+"/api/stream");
+evtSource.onmessage=function(e){
+try{
+const data=JSON.parse(e.data);
+if(data.error){console.error(data.error);return}
+const{status,system:sys,tunnels,speed}=data;
+setGauge("gauge-cpu",sys.cpu_percent);
+document.getElementById("gauge-cpu-text").textContent=sys.cpu_percent+"%";
+document.getElementById("cpu-cores").textContent=sys.cpu_count;
+setGauge("gauge-ram",sys.ram_percent);
+document.getElementById("gauge-ram-text").textContent=sys.ram_percent+"%";
+document.getElementById("ram-info").textContent=fmtMB(sys.ram_used)+" / "+fmtMB(sys.ram_total);
+setGauge("gauge-swap",sys.swap_percent);
+document.getElementById("gauge-swap-text").textContent=sys.swap_percent+"%";
+document.getElementById("swap-info").textContent=fmtMB(sys.swap_used)+" / "+fmtMB(sys.swap_total);
+setGauge("gauge-disk",sys.disk_percent);
+document.getElementById("gauge-disk-text").textContent=sys.disk_percent+"%";
+document.getElementById("disk-info").textContent=sys.disk_used+" GB / "+sys.disk_total+" GB";
+const dot=document.getElementById("svc-dot");
+const stxt=document.getElementById("svc-status");
+dot.className=status.connected?"status-dot online":"status-dot offline";
+stxt.textContent=status.connected?"Running":"Stopped";
+stxt.style.color=status.connected?"var(--accent)":"var(--danger)";
+document.getElementById("uptime-gw").textContent="GhostWire: "+status.uptime;
+document.getElementById("uptime-os").textContent="OS: "+status.os_uptime;
+document.getElementById("load-avg").textContent=sys.load_1+" | "+sys.load_5+" | "+sys.load_15;
+document.getElementById("speed-up").textContent=fmtSpeed(speed.upload);
+document.getElementById("speed-down").textContent=fmtSpeed(speed.download);
+document.getElementById("total-sent").textContent=fmtBytes(sys.net_sent);
+document.getElementById("total-recv").textContent=fmtBytes(sys.net_recv);
+document.getElementById("tunnel-count-overview").textContent=tunnels.length;
+document.getElementById("tunnel-badges").innerHTML=tunnels.map(t=>'<span class="badge badge-accent">'+t+'</span>').join("");
+}catch(err){console.error(err)}
+};
+evtSource.onerror=function(){console.error("SSE error, reconnecting...");setTimeout(()=>location.reload(),5000)};
 </script>
 </body>
 </html>

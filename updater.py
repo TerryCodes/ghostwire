@@ -23,7 +23,7 @@ class Updater:
     def get_current_version(self):
         script_path=Path(sys.argv[0])
         if script_path.name.startswith(f"ghostwire-{self.component_name}"):
-            return "v0.3.6"
+            return "v0.4.0"
         return "dev"
 
     async def check_for_update(self):
@@ -58,7 +58,7 @@ class Updater:
             binary_url=self.update_url
             checksum_url=f"{binary_url}.sha256"
             logger.info(f"Downloading update from {binary_url}")
-            tmpdir="/tmp/ghostwire-update"
+            tmpdir=f"/tmp/ghostwire-update-{self.component_name}-{os.getpid()}"
             os.makedirs(tmpdir,exist_ok=True)
             binary_path=os.path.join(tmpdir,f"ghostwire-{self.component_name}")
             response=requests.get(binary_url,timeout=30,stream=True)

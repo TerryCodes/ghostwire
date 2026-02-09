@@ -1,4 +1,5 @@
 #!/usr/bin/env python3.13
+import json
 import os
 import subprocess
 import sys
@@ -190,6 +191,45 @@ def api_save_config():
 @panel_route("/api/logs")
 def api_logs():
     return tail_log(200)
+
+@panel_route("/api/logs/stream")
+def api_logs_stream():
+    def generate():
+        try:
+            proc=subprocess.Popen(["tail","-f","-n","50","/var/log/ghostwire-server.log"],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            for line in iter(proc.stdout.readline,""):
+                if not line:
+                    break
+                yield f"data: {line}\n\n"
+        except Exception as e:
+            yield f"data: Error streaming logs: {e}\n\n"
+    return Response(generate(),mimetype="text/event-stream")
+
+@panel_route("/api/stream")
+def api_stream():
+    def generate():
+        prev_net={"sent":0,"recv":0}
+        while True:
+            try:
+                status_data={"connected":get_connection_status(),"uptime":get_uptime(),"os_uptime":get_os_uptime()}
+                sys_data=get_system_info()
+                config=read_config()
+                tunnels_data=config["tunnels"]["ports"]
+                speed_data={}
+                if prev_net["sent"]>0:
+                    speed_data["upload"]=(sys_data["net_sent"]-prev_net["sent"])/3.0
+                    speed_data["download"]=(sys_data["net_recv"]-prev_net["recv"])/3.0
+                else:
+                    speed_data["upload"]=0
+                    speed_data["download"]=0
+                prev_net={"sent":sys_data["net_sent"],"recv":sys_data["net_recv"]}
+                payload={"status":status_data,"system":sys_data,"tunnels":tunnels_data,"speed":speed_data}
+                yield f"data: {json.dumps(payload)}\n\n"
+                time.sleep(3)
+            except Exception as e:
+                yield f"data: {json.dumps({'error':str(e)})}\n\n"
+                time.sleep(3)
+    return Response(generate(),mimetype="text/event-stream")
 
 @panel_route("/api/restart",methods=["POST"])
 def api_restart():

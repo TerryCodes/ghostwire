@@ -115,7 +115,7 @@ class GhostWireClient:
     async def forward_remote_to_websocket(self,conn_id,reader):
         try:
             while True:
-                data=await reader.read(131072)
+                data=await reader.read(16384)
                 if not data:
                     break
                 if not self.send_queue:
@@ -123,9 +123,9 @@ class GhostWireClient:
                     break
                 message=pack_data(conn_id,data,self.key)
                 try:
-                    await self.send_queue.put(message)
-                except (asyncio.QueueFull,AttributeError):
-                    logger.warning(f"Send queue unavailable, stopping forward for {conn_id}")
+                    await asyncio.wait_for(self.send_queue.put(message),timeout=30)
+                except (asyncio.TimeoutError,AttributeError):
+                    logger.warning(f"Send queue timeout for {conn_id}")
                     break
         except Exception as e:
             logger.debug(f"Forward error for {conn_id}: {e}")
@@ -216,7 +216,7 @@ class GhostWireClient:
             update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
         while self.running and not self.shutdown_event.is_set():
             if await self.connect():
-                send_queue=asyncio.Queue(maxsize=50000)
+                send_queue=asyncio.Queue()
                 stop_event=asyncio.Event()
                 self.send_queue=send_queue
                 try:
