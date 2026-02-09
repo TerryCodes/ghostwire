@@ -23,10 +23,11 @@ python3.13 -m PyInstaller --onefile --name ghostwire-client client.py
 "
 
 echo "Generating checksums..."
-cd dist
+docker run --rm -v "$(pwd):/build" ghostwire-builder bash -c "
+cd /build/dist
 sha256sum ghostwire-server > ghostwire-server.sha256
 sha256sum ghostwire-client > ghostwire-client.sha256
-cd ..
+"
 
 echo "Build complete!"
 echo "Binaries available in dist/"
