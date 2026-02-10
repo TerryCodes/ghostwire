@@ -11,6 +11,7 @@ import tomllib
 import toml
 from flask import Flask,request,jsonify,Response
 from waitress import serve
+from updater import Updater
 
 app=Flask(__name__)
 
@@ -142,7 +143,6 @@ def index():
 
 @panel_route("/api/status")
 def api_status():
-    from updater import Updater
     connected=get_connection_status()
     config=read_config()
     tunnel_count=len(config["tunnels"]["ports"])
@@ -215,7 +215,9 @@ def api_stream():
         prev_net={"sent":0,"recv":0}
         while True:
             try:
-                status_data={"connected":get_connection_status(),"uptime":get_uptime(),"os_uptime":get_os_uptime()}
+                server_version=Updater("server").current_version
+                client_version=server_instance.client_version if server_instance else None
+                status_data={"connected":get_connection_status(),"uptime":get_uptime(),"os_uptime":get_os_uptime(),"server_version":server_version,"client_version":client_version}
                 sys_data=get_system_info()
                 config=read_config()
                 tunnels_data=config["tunnels"]["ports"]
