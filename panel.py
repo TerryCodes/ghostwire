@@ -15,6 +15,7 @@ from waitress import serve
 app=Flask(__name__)
 
 panel_config=None
+server_instance=None
 server_start_time=time.time()
 _routes=[]
 
@@ -141,10 +142,13 @@ def index():
 
 @panel_route("/api/status")
 def api_status():
+    from updater import Updater
     connected=get_connection_status()
     config=read_config()
     tunnel_count=len(config["tunnels"]["ports"])
-    return jsonify({"connected":connected,"uptime":get_uptime(),"tunnel_count":tunnel_count,"os_uptime":get_os_uptime()})
+    server_version=Updater("server").current_version
+    client_version=server_instance.client_version if server_instance else None
+    return jsonify({"connected":connected,"uptime":get_uptime(),"tunnel_count":tunnel_count,"os_uptime":get_os_uptime(),"server_version":server_version,"client_version":client_version})
 
 @panel_route("/api/system")
 def api_system():
@@ -261,9 +265,10 @@ def error_405(e):
 def error_500(e):
     return _load_error_html(500)
 
-def start_panel(config):
-    global panel_config
+def start_panel(config,server):
+    global panel_config,server_instance
     panel_config=config
+    server_instance=server
     if not config.panel_enabled:
         return
     _register_routes()

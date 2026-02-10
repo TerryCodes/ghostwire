@@ -145,6 +145,8 @@ class GhostWireClient:
             self.last_ping_time=time.time()
             self.last_pong_time=time.time()
             logger.info("Connected and authenticated to server")
+            info_msg=pack_info(self.updater.current_version,self.key)
+            await self.websocket.send(info_msg)
             self.reconnect_delay=self.config.initial_delay
             return True
         except Exception as e:

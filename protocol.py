@@ -14,6 +14,7 @@ MSG_CLOSE=0x04
 MSG_PING=0x05
 MSG_PONG=0x06
 MSG_ERROR=0x07
+MSG_INFO=0x08
 
 def generate_rsa_keypair():
     private_key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
@@ -113,3 +114,6 @@ def pack_pong(timestamp,key):
 
 def pack_error(conn_id,error_msg,key):
     return pack_message(MSG_ERROR,conn_id,error_msg.encode(),key)
+
+def pack_info(version,key):
+    return pack_message(MSG_INFO,0,version.encode(),key)

@@ -42,6 +42,7 @@ class GhostWireServer:
         self.ping_timeout=config.ping_timeout
         self.conn_write_queues={}
         self.conn_write_tasks={}
+        self.client_version=None
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
         self.updater=Updater("server",check_interval=config.update_check_interval,check_on_startup=config.update_check_on_startup)
@@ -173,6 +174,9 @@ class GhostWireServer:
                     elif msg_type==MSG_ERROR:
                         logger.error(f"Client error for {conn_id}: {payload.decode()}")
                         self.tunnel_manager.remove_connection(conn_id)
+                    elif msg_type==MSG_INFO:
+                        self.client_version=payload.decode()
+                        logger.info(f"Client version: {self.client_version}")
                     elif msg_type==MSG_PING:
                         timestamp=struct.unpack("!Q",payload)[0]
                         try:
@@ -201,6 +205,7 @@ class GhostWireServer:
                 self.websocket=None
                 self.send_queue=None
                 self.control_queue=None
+                self.client_version=None
                 self.tunnel_manager.close_all()
 
     async def ping_monitor_loop(self):
@@ -300,7 +305,7 @@ class GhostWireServer:
     async def start(self):
         self.running=True
         logger.info(f"Starting GhostWire server on {self.config.listen_host}:{self.config.listen_port}")
-        start_panel(self.config)
+        start_panel(self.config,self)
         update_task=None
         if self.config.auto_update:
             update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))

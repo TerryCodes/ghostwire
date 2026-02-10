@@ -112,7 +112,7 @@ body{font-family:'Nunito',sans-serif;background:var(--bg);color:var(--text);line
 <body>
 <aside class="sidebar" id="sidebar">
 <div class="sidebar-header">
-<h2>GhostWire<span class="version-tag">v0.1</span></h2>
+<h2>GhostWire<span class="version-tag" id="sidebar-version">v0.6.2</span></h2>
 <span>Management Panel</span>
 </div>
 <nav class="sidebar-nav">
@@ -257,10 +257,11 @@ Refresh
 </div>
 </div>
 <div class="card">
-<div class="card-header"><h3>Connection Info</h3></div>
+<div class="card-header"><h3>Version Info</h3></div>
 <div class="card-body">
-<div class="badges" id="conn-badges">
-<span class="badge badge-muted">Tunnels: <span id="tunnel-count-overview">0</span></span>
+<div class="badges" id="version-badges">
+<span class="badge badge-accent">Server: <span id="server-version">-</span></span>
+<span class="badge badge-accent" id="client-version-badge" style="display:none">Client: <span id="client-version">-</span></span>
 </div>
 </div>
 </div>
@@ -471,7 +472,14 @@ document.getElementById("speed-up").textContent=fmtSpeed(speed.upload);
 document.getElementById("speed-down").textContent=fmtSpeed(speed.download);
 document.getElementById("total-sent").textContent=fmtBytes(sys.net_sent);
 document.getElementById("total-recv").textContent=fmtBytes(sys.net_recv);
-document.getElementById("tunnel-count-overview").textContent=tunnels.length;
+document.getElementById("server-version").textContent=status.server_version||"-";
+const clientVerBadge=document.getElementById("client-version-badge");
+if(status.client_version){
+document.getElementById("client-version").textContent=status.client_version;
+clientVerBadge.style.display="inline-block";
+}else{
+clientVerBadge.style.display="none";
+}
 document.getElementById("tunnel-badges").innerHTML=tunnels.map(t=>'<span class="badge badge-accent">'+t+'</span>').join("");
 }catch(err){console.error(err)}
 };
