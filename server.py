@@ -6,6 +6,7 @@ import sys
 import time
 import struct
 import argparse
+import os
 import websockets
 from http import HTTPStatus
 from protocol import *
@@ -31,11 +32,14 @@ class GhostWireServer:
         self.config=config
         self.running=False
         self.websocket=None
+        self.main_websocket=None
         self.key=None
         self.tunnel_manager=TunnelManager()
         self.listeners=[]
         self.send_queue=None
         self.control_queue=None
+        self.main_send_queue=None
+        self.main_control_queue=None
         self.shutdown_event=asyncio.Event()
         self.auth_lock=asyncio.Lock()
         self.last_ping_time=0
@@ -43,6 +47,9 @@ class GhostWireServer:
         self.conn_write_queues={}
         self.conn_write_tasks={}
         self.client_version=None
+        self.child_channels={}
+        self.conn_channel_map={}
+        self.child_rr_index=0
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
         self.updater=Updater("server",check_interval=config.update_check_interval,check_on_startup=config.update_check_on_startup)
@@ -114,10 +121,64 @@ class GhostWireServer:
             logger.debug(f"Sender task error: {e}")
         finally:
             logger.debug("Sender task stopped")
+
+    def get_available_child_ids(self):
+        return [child_id for child_id,channel in self.child_channels.items() if channel.get("ws") and getattr(channel.get("ws"),"close_code",None) is None]
+
+    def pick_child_for_connection(self):
+        child_ids=self.get_available_child_ids()
+        if not child_ids:
+            return None
+        child_id=child_ids[self.child_rr_index%len(child_ids)]
+        self.child_rr_index+=1
+        return child_id
+
+    async def close_child_channels(self):
+        for child_id,channel in list(self.child_channels.items()):
+            stop_event=channel.get("stop_event")
+            sender=channel.get("sender")
+            ws=channel.get("ws")
+            if stop_event:
+                stop_event.set()
+            if sender:
+                try:
+                    await asyncio.wait_for(sender,timeout=2)
+                except:
+                    sender.cancel()
+            if ws and getattr(ws,"close_code",None) is None:
+                try:
+                    await asyncio.wait_for(ws.close(),timeout=2)
+                except:
+                    pass
+            self.child_channels.pop(child_id,None)
+        self.conn_channel_map.clear()
+
+    async def close_connections_for_child(self,child_id):
+        affected=[conn_id for conn_id,mapped_child in self.conn_channel_map.items() if mapped_child==child_id]
+        for conn_id in affected:
+            self.conn_channel_map.pop(conn_id,None)
+            await self.close_conn_writer(conn_id,flush=False)
+            self.tunnel_manager.remove_connection(conn_id)
+
+    async def route_message(self,msg_type,conn_id,payload):
+        if msg_type==MSG_DATA:
+            await self.handle_data(conn_id,payload)
+        elif msg_type==MSG_CLOSE:
+            await self.handle_close(conn_id)
+            self.conn_channel_map.pop(conn_id,None)
+        elif msg_type==MSG_ERROR:
+            logger.error(f"Client error for {conn_id}: {payload.decode()}")
+            self.tunnel_manager.remove_connection(conn_id)
+            self.conn_channel_map.pop(conn_id,None)
+        elif msg_type==MSG_INFO:
+            self.client_version=payload.decode()
+            logger.info(f"Client version: {self.client_version}")
     async def handle_client(self,websocket):
         client_id=f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
         logger.info(f"New connection from {client_id}")
         authenticated=False
+        role="main"
+        child_id=""
         sender=None
         ping_monitor=None
         send_queue=asyncio.Queue(maxsize=32768)
@@ -131,35 +192,81 @@ class GhostWireServer:
             auth_msg=await asyncio.wait_for(websocket.recv(),timeout=30)
             buffer+=auth_msg
             async with self.auth_lock:
-                if self.websocket is not None:
-                    logger.warning(f"Rejecting {client_id}: client already connected")
+                if len(buffer)<9:
+                    logger.warning(f"Incomplete auth from {client_id}")
                     return
-                if len(buffer)>=9:
-                    msg_type,conn_id,encrypted_token,consumed=unpack_message(buffer,None)
-                    buffer=buffer[consumed:]
-                    if msg_type!=MSG_AUTH:
-                        logger.warning(f"Expected AUTH message from {client_id}")
+                msg_type,conn_id,encrypted_token,consumed=unpack_message(buffer,None)
+                buffer=buffer[consumed:]
+                if msg_type!=MSG_AUTH:
+                    logger.warning(f"Expected AUTH message from {client_id}")
+                    return
+                try:
+                    token,role,child_id=unpack_auth_payload(rsa_decrypt(self.private_key,encrypted_token))
+                except Exception as e:
+                    logger.warning(f"Failed to decrypt token from {client_id}: {e}")
+                    return
+                if not validate_token(token,self.config.token):
+                    logger.warning(f"Invalid token from {client_id}")
+                    return
+                if role=="main":
+                    if self.main_websocket is not None:
+                        logger.warning(f"Rejecting {client_id}: main already connected")
+                        return
+                elif role=="child":
+                    if not self.config.ws_pool_enabled:
+                        logger.warning(f"Rejecting {client_id}: child channels disabled")
+                        return
+                    if self.main_websocket is None:
+                        logger.warning(f"Rejecting {client_id}: main not connected")
+                        return
+                    if not child_id:
+                        logger.warning(f"Rejecting {client_id}: missing child id")
+                        return
+                    if self.key is None:
+                        logger.warning(f"Rejecting {client_id}: missing main session key")
+                        return
+                else:
+                    logger.warning(f"Rejecting {client_id}: unknown role {role}")
+                    return
+                authenticated=True
+                if role=="main":
+                    client_pubkey_msg=await asyncio.wait_for(websocket.recv(),timeout=10)
+                    if len(client_pubkey_msg)<9:
+                        logger.warning(f"Rejecting {client_id}: invalid client public key message")
                         return
                     try:
-                        token=rsa_decrypt(self.private_key,encrypted_token).decode()
+                        key_msg_type,_,client_pubkey_bytes,_=unpack_message(client_pubkey_msg,None)
+                        if key_msg_type!=MSG_PUBKEY:
+                            logger.warning(f"Rejecting {client_id}: expected client public key message")
+                            return
+                        client_public_key=deserialize_public_key(client_pubkey_bytes)
                     except Exception as e:
-                        logger.warning(f"Failed to decrypt token from {client_id}: {e}")
+                        logger.warning(f"Rejecting {client_id}: invalid client public key: {e}")
                         return
-                    if not validate_token(token,self.config.token):
-                        logger.warning(f"Invalid token from {client_id}")
-                        return
-                    authenticated=True
-                    self.key=derive_key(token)
-                    logger.info(f"Client {client_id} authenticated")
+                    self.key=os.urandom(32)
+                    await websocket.send(pack_session_key(self.key,client_public_key))
+                logger.info(f"Client {client_id} authenticated role={role}")
+                sender=asyncio.create_task(self.sender_task(websocket,send_queue,control_queue,stop_event))
+                if role=="main":
                     self.websocket=websocket
+                    self.main_websocket=websocket
                     self.send_queue=send_queue
                     self.control_queue=control_queue
-                    sender=asyncio.create_task(self.sender_task(websocket,send_queue,control_queue,stop_event))
+                    self.main_send_queue=send_queue
+                    self.main_control_queue=control_queue
                     ping_monitor=asyncio.create_task(self.ping_monitor_loop())
-                    if not self.listeners:
-                        await self.start_listeners()
+                    if self.config.ws_pool_enabled:
+                        try:
+                            control_queue.put_nowait(pack_child_cfg(self.config.ws_pool_children,self.key))
+                        except asyncio.QueueFull:
+                            logger.warning("Main control queue full, child config dropped")
+                else:
+                    self.child_channels[child_id]={"ws":websocket,"send_queue":send_queue,"control_queue":control_queue,"stop_event":stop_event,"sender":sender}
+                if not self.listeners:
+                    await self.start_listeners()
             async for message in websocket:
-                self.last_ping_time=time.time()
+                if role=="main":
+                    self.last_ping_time=time.time()
                 buffer+=message
                 while len(buffer)>=9:
                     try:
@@ -167,16 +274,11 @@ class GhostWireServer:
                         buffer=buffer[consumed:]
                     except ValueError:
                         break
-                    if msg_type==MSG_DATA:
-                        await self.handle_data(conn_id,payload)
-                    elif msg_type==MSG_CLOSE:
-                        await self.handle_close(conn_id)
-                    elif msg_type==MSG_ERROR:
-                        logger.error(f"Client error for {conn_id}: {payload.decode()}")
-                        self.tunnel_manager.remove_connection(conn_id)
-                    elif msg_type==MSG_INFO:
-                        self.client_version=payload.decode()
-                        logger.info(f"Client version: {self.client_version}")
+                    if msg_type in (MSG_DATA,MSG_CLOSE,MSG_ERROR,MSG_INFO):
+                        if role=="main" and self.config.ws_pool_enabled:
+                            logger.warning(f"Dropping non-control message on main channel: {msg_type}")
+                            continue
+                        await self.route_message(msg_type,conn_id,payload)
                     elif msg_type==MSG_PING:
                         timestamp=struct.unpack("!Q",payload)[0]
                         try:
@@ -201,12 +303,20 @@ class GhostWireServer:
             if ping_monitor:
                 ping_monitor.cancel()
             if authenticated:
-                self.clear_conn_writers()
-                self.websocket=None
-                self.send_queue=None
-                self.control_queue=None
-                self.client_version=None
-                self.tunnel_manager.close_all()
+                if role=="main":
+                    await self.close_child_channels()
+                    self.clear_conn_writers()
+                    self.websocket=None
+                    self.main_websocket=None
+                    self.send_queue=None
+                    self.control_queue=None
+                    self.main_send_queue=None
+                    self.main_control_queue=None
+                    self.client_version=None
+                    self.tunnel_manager.close_all()
+                else:
+                    self.child_channels.pop(child_id,None)
+                    await self.close_connections_for_child(child_id)
 
     async def ping_monitor_loop(self):
         interval=max(2,self.ping_timeout//2)
@@ -214,8 +324,8 @@ class GhostWireServer:
             await asyncio.sleep(interval)
             if time.time()-self.last_ping_time>self.ping_timeout:
                 logger.warning("Client ping timeout, closing connection")
-                if self.websocket:
-                    await self.websocket.close()
+                if self.main_websocket:
+                    await self.main_websocket.close()
                 break
 
     async def start_listeners(self):
@@ -229,17 +339,36 @@ class GhostWireServer:
         self.tunnel_manager.add_connection(conn_id,(reader,writer))
         logger.info(f"New local connection {conn_id} -> {remote_ip}:{remote_port}")
         try:
-            if not self.websocket or not self.send_queue or not self.control_queue:
+            send_queue=self.send_queue
+            control_queue=self.control_queue
+            selected_child=""
+            if self.config.ws_pool_enabled:
+                selected_child=self.pick_child_for_connection()
+                if selected_child:
+                    channel=self.child_channels.get(selected_child)
+                    if channel:
+                        send_queue=channel.get("send_queue")
+                        control_queue=channel.get("control_queue")
+                        self.conn_channel_map[conn_id]=selected_child
+                else:
+                    logger.warning(f"No child channel available, dropping connection {conn_id}")
+                    self.tunnel_manager.remove_connection(conn_id)
+                    writer.close()
+                    await writer.wait_closed()
+                    return
+            if not self.websocket or not send_queue or not control_queue:
                 logger.error(f"No client connected, dropping connection {conn_id}")
+                self.conn_channel_map.pop(conn_id,None)
                 self.tunnel_manager.remove_connection(conn_id)
                 writer.close()
                 await writer.wait_closed()
                 return
             connect_msg=pack_connect(conn_id,remote_ip,remote_port,self.key)
             try:
-                self.control_queue.put_nowait(connect_msg)
+                control_queue.put_nowait(connect_msg)
             except (asyncio.QueueFull,AttributeError):
                 logger.error(f"Control queue unavailable, dropping connection {conn_id}")
+                self.conn_channel_map.pop(conn_id,None)
                 self.tunnel_manager.remove_connection(conn_id)
                 writer.close()
                 await writer.wait_closed()
@@ -257,14 +386,23 @@ class GhostWireServer:
                 data=await reader.read(65536)
                 if not data:
                     break
-                if not self.websocket or not self.send_queue:
+                send_queue=self.send_queue
+                if self.config.ws_pool_enabled:
+                    mapped_child=self.conn_channel_map.get(conn_id)
+                    if not mapped_child:
+                        logger.debug(f"No child mapping for {conn_id}, stopping forward")
+                        break
+                    channel=self.child_channels.get(mapped_child)
+                    if channel:
+                        send_queue=channel.get("send_queue")
+                if not self.websocket or not send_queue:
                     logger.debug(f"Client disconnected, stopping forward for {conn_id}")
                     break
                 message=pack_data(conn_id,data,self.key)
                 try:
-                    while self.running and self.send_queue:
+                    while self.running and send_queue:
                         try:
-                            await asyncio.wait_for(self.send_queue.put(message),timeout=1)
+                            await asyncio.wait_for(send_queue.put(message),timeout=1)
                             break
                         except asyncio.TimeoutError:
                             continue
@@ -275,10 +413,18 @@ class GhostWireServer:
             logger.debug(f"Forward error for {conn_id}: {e}")
         finally:
             try:
-                if self.websocket and self.control_queue:
-                    self.control_queue.put_nowait(pack_close(conn_id,0,self.key))
+                control_queue=self.control_queue
+                if self.config.ws_pool_enabled:
+                    mapped_child=self.conn_channel_map.get(conn_id)
+                    if mapped_child:
+                        channel=self.child_channels.get(mapped_child)
+                        if channel:
+                            control_queue=channel.get("control_queue")
+                if self.websocket and control_queue:
+                    control_queue.put_nowait(pack_close(conn_id,0,self.key))
             except:
                 pass
+            self.conn_channel_map.pop(conn_id,None)
             self.tunnel_manager.remove_connection(conn_id)
 
     async def handle_data(self,conn_id,payload):

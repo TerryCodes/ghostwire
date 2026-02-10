@@ -15,6 +15,8 @@ MSG_PING=0x05
 MSG_PONG=0x06
 MSG_ERROR=0x07
 MSG_INFO=0x08
+MSG_CHILD_CFG=0x09
+MSG_SESSION_KEY=0x0A
 
 def generate_rsa_keypair():
     private_key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
@@ -60,14 +62,24 @@ def pack_pubkey(public_key):
     header=pack_header(MSG_PUBKEY,0,len(pubkey_bytes))
     return header+pubkey_bytes
 
-def pack_auth_message(token,public_key=None):
+def pack_auth_payload(token,role="main",child_id=""):
+    return role.encode()+b"\x00"+child_id.encode()+b"\x00"+token.encode()
+
+def unpack_auth_payload(payload):
+    parts=payload.split(b"\x00",2)
+    if len(parts)==3:
+        return parts[2].decode(),parts[0].decode(),parts[1].decode()
+    return payload.decode(),"main",""
+
+def pack_auth_message(token,public_key=None,role="main",child_id=""):
+    payload=pack_auth_payload(token,role,child_id)
     if public_key:
-        encrypted_token=rsa_encrypt(public_key,token.encode())
+        encrypted_token=rsa_encrypt(public_key,payload)
         header=pack_header(MSG_AUTH,0,len(encrypted_token))
         return header+encrypted_token
     else:
-        header=pack_header(MSG_AUTH,0,len(token))
-        return header+token.encode()
+        header=pack_header(MSG_AUTH,0,len(payload))
+        return header+payload
 
 def pack_message(msg_type,conn_id,payload,key):
     aad=pack_header(msg_type,conn_id,0)
@@ -86,6 +98,8 @@ def unpack_message(data,key):
     if msg_type==MSG_PUBKEY:
         return msg_type,conn_id,payload,9+payload_length
     if msg_type==MSG_AUTH:
+        return msg_type,conn_id,payload,9+payload_length
+    if msg_type==MSG_SESSION_KEY:
         return msg_type,conn_id,payload,9+payload_length
     aad=pack_header(msg_type,conn_id,0)
     decrypted=decrypt_payload(key,payload,aad)
@@ -117,3 +131,17 @@ def pack_error(conn_id,error_msg,key):
 
 def pack_info(version,key):
     return pack_message(MSG_INFO,0,version.encode(),key)
+
+def pack_child_cfg(child_count,key):
+    return pack_message(MSG_CHILD_CFG,0,struct.pack("!H",child_count),key)
+
+def unpack_child_cfg(payload):
+    return struct.unpack("!H",payload)[0]
+
+def pack_session_key(session_key,client_public_key):
+    encrypted_key=rsa_encrypt(client_public_key,session_key)
+    header=pack_header(MSG_SESSION_KEY,0,len(encrypted_key))
+    return header+encrypted_key
+
+def unpack_session_key(payload,client_private_key):
+    return rsa_decrypt(client_private_key,payload)

@@ -72,6 +72,8 @@ class ServerConfig:
         self.log_level=config["logging"].get("level","info")
         self.log_file=config["logging"].get("file","/var/log/ghostwire-server.log")
         self.ping_timeout=config["server"].get("ping_timeout",10)
+        self.ws_pool_enabled=config["server"].get("ws_pool_enabled",False)
+        self.ws_pool_children=config["server"].get("ws_pool_children",2)
         self.auto_update=config["server"].get("auto_update",True)
         self.update_check_interval=config["server"].get("update_check_interval",300)
         self.update_check_on_startup=config["server"].get("update_check_on_startup",True)
