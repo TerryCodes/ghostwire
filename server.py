@@ -41,7 +41,7 @@ class GhostWireServer:
         self.ping_timeout=config.ping_timeout
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
-        self.updater=Updater("server")
+        self.updater=Updater("server",check_interval=config.update_check_interval,check_on_startup=config.update_check_on_startup)
 
     async def sender_task(self,websocket,send_queue,stop_event):
         try:

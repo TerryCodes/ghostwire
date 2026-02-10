@@ -37,7 +37,7 @@ class GhostWireClient:
         self.last_pong_time=0
         self.ping_interval=10
         self.ping_timeout=60
-        self.updater=Updater("client")
+        self.updater=Updater("client",check_interval=config.update_check_interval,check_on_startup=config.update_check_on_startup)
 
     async def sender_task(self,send_queue,stop_event):
         try:

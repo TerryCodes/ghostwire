@@ -3,6 +3,8 @@ listen_host="0.0.0.0"
 listen_port=8443
 websocket_path="/ws"
 auto_update=true
+update_check_interval=300
+update_check_on_startup=true
 
 [auth]
 token="REPLACE_WITH_GENERATED_TOKEN"

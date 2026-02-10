@@ -130,6 +130,8 @@ listen_port=${WS_PORT}
 websocket_path="/ws"
 ping_timeout=10
 auto_update=${AUTO_UPDATE}
+update_check_interval=300
+update_check_on_startup=true
 
 [auth]
 token="${TOKEN}"

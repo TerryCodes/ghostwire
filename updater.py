@@ -11,11 +11,12 @@ from pathlib import Path
 logger=logging.getLogger(__name__)
 
 GITHUB_REPO="frenchtoblerone54/ghostwire"
-CHECK_INTERVAL=300
 
 class Updater:
-    def __init__(self,component_name):
+    def __init__(self,component_name,check_interval=300,check_on_startup=True):
         self.component_name=component_name
+        self.check_interval=check_interval
+        self.check_on_startup=check_on_startup
         self.current_version=self.get_current_version()
         self.update_url=f"https://github.com/{GITHUB_REPO}/releases/latest/download/ghostwire-{component_name}"
         self.check_url=f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -89,10 +90,19 @@ class Updater:
             return False
 
     async def update_loop(self,shutdown_event):
-        logger.info(f"Auto-update checker started (current version: {self.current_version})")
+        logger.info(f"Auto-update checker started (interval: {self.check_interval}s, current version: {self.current_version})")
+        if self.check_on_startup:
+            logger.info("Checking for updates on startup...")
+            new_version=await self.check_for_update()
+            if new_version:
+                logger.info(f"Updating to {new_version}...")
+                success=await self.download_update(new_version)
+                if success:
+                    logger.info("Update complete, shutting down for systemd restart...")
+                    return
         while not shutdown_event.is_set():
             try:
-                await asyncio.sleep(CHECK_INTERVAL)
+                await asyncio.sleep(self.check_interval)
                 if shutdown_event.is_set():
                     break
                 new_version=await self.check_for_update()

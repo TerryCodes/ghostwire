@@ -121,6 +121,8 @@ listen_port=8443
 websocket_path="/ws"
 ping_timeout=10
 auto_update=true
+update_check_interval=300
+update_check_on_startup=true
 
 [auth]
 token="V1StGXR8_Z5jdHi6B-my"
@@ -157,6 +159,8 @@ The panel is accessible at `http://127.0.0.1:9090/{path}/` where `path` is a ran
 url="wss://tunnel.example.com/ws"
 token="V1StGXR8_Z5jdHi6B-my"
 auto_update=true
+update_check_interval=300
+update_check_on_startup=true
 
 [reconnect]
 initial_delay=1
@@ -174,6 +178,16 @@ max_connection_time=1740
 level="info"
 file="/var/log/ghostwire-client.log"
 ```
+
+### Auto-Update Configuration
+
+Both server and client support automatic updates from GitHub releases:
+
+- **`auto_update`** (default: `true`): Enable/disable automatic updates
+- **`update_check_interval`** (default: `300`): Seconds between update checks
+- **`update_check_on_startup`** (default: `true`): Check for updates immediately on startup
+
+When an update is found, the binary is downloaded, verified with SHA-256 checksum, and the service restarts automatically via systemd.
 
 ## Proxy Configuration
 

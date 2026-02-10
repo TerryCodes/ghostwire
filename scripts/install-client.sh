@@ -87,6 +87,8 @@ if [ ! -f /etc/ghostwire/client.toml ]; then
 url="${SERVER_URL}"
 token="${TOKEN}"
 auto_update=${AUTO_UPDATE}
+update_check_interval=300
+update_check_on_startup=true
 
 [reconnect]
 initial_delay=1
