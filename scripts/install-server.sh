@@ -101,7 +101,8 @@ if [ ! -f /etc/ghostwire/server.toml ]; then
 enabled=true
 host=\"${PANEL_HOST}\"
 port=${PANEL_PORT}
-path=\"${PANEL_PATH}\""
+path=\"${PANEL_PATH}\"
+threads=4"
     fi
 
     TUNNEL_ARRAY=$(printf ',"%s"' "${TUNNELS[@]}")

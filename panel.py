@@ -270,7 +270,7 @@ def start_panel(config):
     def run():
         print(f"Starting web panel on {config.panel_host}:{config.panel_port}")
         print(f"Access panel at: http://{config.panel_host}:{config.panel_port}/{config.panel_path}/")
-        serve(app,host=config.panel_host,port=config.panel_port,threads=4)
+        serve(app,host=config.panel_host,port=config.panel_port,threads=config.panel_threads)
     thread=threading.Thread(target=run,daemon=True)
     thread.start()
 
