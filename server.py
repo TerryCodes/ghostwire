@@ -121,7 +121,7 @@ class GhostWireServer:
         sender=None
         ping_monitor=None
         send_queue=asyncio.Queue(maxsize=8192)
-        control_queue=asyncio.Queue(maxsize=2048)
+        control_queue=asyncio.Queue(maxsize=8192)
         stop_event=asyncio.Event()
         self.last_ping_time=time.time()
         try:
@@ -254,7 +254,7 @@ class GhostWireServer:
     async def forward_local_to_websocket(self,conn_id,reader):
         try:
             while True:
-                data=await reader.read(16384)
+                data=await reader.read(65536)
                 if not data:
                     break
                 if not self.websocket or not self.send_queue:
@@ -262,9 +262,14 @@ class GhostWireServer:
                     break
                 message=pack_data(conn_id,data,self.key)
                 try:
-                    await asyncio.wait_for(self.send_queue.put(message),timeout=30)
-                except (asyncio.TimeoutError,AttributeError):
-                    logger.warning(f"Send queue timeout for {conn_id}")
+                    while self.running and self.send_queue:
+                        try:
+                            await asyncio.wait_for(self.send_queue.put(message),timeout=1)
+                            break
+                        except asyncio.TimeoutError:
+                            continue
+                except AttributeError:
+                    logger.warning(f"Send queue unavailable for {conn_id}")
                     break
         except Exception as e:
             logger.debug(f"Forward error for {conn_id}: {e}")
@@ -309,7 +314,7 @@ class GhostWireServer:
         update_task=None
         if self.config.auto_update:
             update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
-        async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,max_queue=1024,ping_interval=None,process_request=self.process_request):
+        async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,max_queue=1024,ping_interval=None,compression=None,write_limit=1048576,process_request=self.process_request):
             await self.shutdown_event.wait()
         if update_task:
             update_task.cancel()

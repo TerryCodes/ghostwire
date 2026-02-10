@@ -36,6 +36,7 @@ class GhostWireClient:
         self.shutdown_event=asyncio.Event()
         self.last_ping_time=0
         self.last_pong_time=0
+        self.last_rx_time=0
         self.ping_interval=10
         self.ping_timeout=60
         self.conn_write_queues={}
@@ -93,7 +94,7 @@ class GhostWireClient:
                     queue.task_done()
                     break
                 writer.write(payload)
-                await asyncio.wait_for(writer.drain(),timeout=15)
+                await asyncio.wait_for(writer.drain(),timeout=60)
                 queue.task_done()
         except asyncio.TimeoutError:
             logger.warning(f"Write timeout for remote connection {conn_id}")
@@ -131,7 +132,7 @@ class GhostWireClient:
                 if best_ip:
                     server_url=self.config.server_url.replace(self.config.cloudflare_host,best_ip)
                     logger.info(f"Using CloudFlare IP: {best_ip}")
-            self.websocket=await websockets.connect(server_url,max_size=None,max_queue=1024,ping_interval=None,close_timeout=5)
+            self.websocket=await websockets.connect(server_url,max_size=None,max_queue=1024,ping_interval=None,compression=None,write_limit=1048576,close_timeout=5)
             pubkey_msg=await asyncio.wait_for(self.websocket.recv(),timeout=10)
             if len(pubkey_msg)<9:
                 raise ValueError("Invalid public key message")
@@ -144,6 +145,7 @@ class GhostWireClient:
             self.key=derive_key(self.config.token)
             self.last_ping_time=time.time()
             self.last_pong_time=time.time()
+            self.last_rx_time=time.time()
             logger.info("Connected and authenticated to server")
             info_msg=pack_info(self.updater.current_version,self.key)
             await self.websocket.send(info_msg)
@@ -160,7 +162,7 @@ class GhostWireClient:
             try:
                 test_url=self.config.server_url.replace(self.config.cloudflare_host,ip)
                 start=time.time()
-                ws=await asyncio.wait_for(websockets.connect(test_url,max_size=None,ping_interval=None),timeout=5)
+                ws=await asyncio.wait_for(websockets.connect(test_url,max_size=None,ping_interval=None,compression=None,write_limit=1048576),timeout=5)
                 latency=time.time()-start
                 await ws.close()
                 if latency<best_latency:
@@ -193,7 +195,7 @@ class GhostWireClient:
     async def forward_remote_to_websocket(self,conn_id,reader):
         try:
             while True:
-                data=await reader.read(16384)
+                data=await reader.read(65536)
                 if not data:
                     break
                 if not self.send_queue:
@@ -201,9 +203,14 @@ class GhostWireClient:
                     break
                 message=pack_data(conn_id,data,self.key)
                 try:
-                    await asyncio.wait_for(self.send_queue.put(message),timeout=30)
-                except (asyncio.TimeoutError,AttributeError):
-                    logger.warning(f"Send queue timeout for {conn_id}")
+                    while self.running and self.send_queue:
+                        try:
+                            await asyncio.wait_for(self.send_queue.put(message),timeout=1)
+                            break
+                        except asyncio.TimeoutError:
+                            continue
+                except AttributeError:
+                    logger.warning(f"Send queue unavailable for {conn_id}")
                     break
         except Exception as e:
             logger.debug(f"Forward error for {conn_id}: {e}")
@@ -220,6 +227,7 @@ class GhostWireClient:
         try:
             async for message in self.websocket:
                 self.last_ping_time=time.time()
+                self.last_rx_time=time.time()
                 buffer+=message
                 while len(buffer)>=9:
                     try:
@@ -241,14 +249,14 @@ class GhostWireClient:
                         self.tunnel_manager.remove_connection(conn_id)
                     elif msg_type==MSG_PING:
                         timestamp=struct.unpack("!Q",payload)[0]
-                        self.last_pong_time=time.time()
+                        self.last_ping_time=time.time()
                         try:
                             if self.control_queue:
                                 self.control_queue.put_nowait(pack_pong(timestamp,self.key))
                         except (asyncio.QueueFull,AttributeError):
                             pass
                     elif msg_type==MSG_PONG:
-                        pass
+                        self.last_pong_time=time.time()
         except websockets.exceptions.ConnectionClosed:
             logger.warning("Connection closed by server")
         except Exception as e:
@@ -297,7 +305,8 @@ class GhostWireClient:
         while self.running and self.websocket:
             await asyncio.sleep(15)
             now=time.time()
-            if now-self.last_ping_time>self.ping_timeout:
+            last_activity=max(self.last_rx_time,self.last_pong_time)
+            if now-last_activity>self.ping_timeout:
                 logger.warning("Server ping timeout, closing connection")
                 if self.websocket:
                     await self.websocket.close()
@@ -311,7 +320,7 @@ class GhostWireClient:
         while self.running and not self.shutdown_event.is_set():
             if await self.connect():
                 send_queue=asyncio.Queue(maxsize=8192)
-                control_queue=asyncio.Queue(maxsize=2048)
+                control_queue=asyncio.Queue(maxsize=8192)
                 stop_event=asyncio.Event()
                 self.send_queue=send_queue
                 self.control_queue=control_queue
