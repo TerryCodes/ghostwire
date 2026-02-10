@@ -160,6 +160,8 @@ The panel is accessible at `http://127.0.0.1:9090/{path}/` where `path` is a ran
 [server]
 url="wss://tunnel.example.com/ws"
 token="V1StGXR8_Z5jdHi6B-my"
+ping_interval=10
+ping_timeout=10
 auto_update=true
 update_check_interval=300
 update_check_on_startup=true

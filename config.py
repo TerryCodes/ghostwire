@@ -86,6 +86,8 @@ class ClientConfig:
         config=load_toml(config_path)
         self.server_url=config["server"]["url"]
         self.token=config["server"]["token"]
+        self.ping_interval=config["server"].get("ping_interval",10)
+        self.ping_timeout=config["server"].get("ping_timeout",10)
         self.initial_delay=config["reconnect"].get("initial_delay",1)
         self.max_delay=config["reconnect"].get("max_delay",60)
         self.multiplier=config["reconnect"].get("multiplier",2)

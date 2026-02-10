@@ -37,8 +37,8 @@ class GhostWireClient:
         self.last_ping_time=0
         self.last_pong_time=0
         self.last_rx_time=0
-        self.ping_interval=10
-        self.ping_timeout=60
+        self.ping_interval=config.ping_interval
+        self.ping_timeout=config.ping_timeout
         self.conn_write_queues={}
         self.conn_write_tasks={}
         self.connect_tasks=set()

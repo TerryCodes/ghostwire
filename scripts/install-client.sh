@@ -86,6 +86,8 @@ if [ ! -f /etc/ghostwire/client.toml ]; then
 [server]
 url="${SERVER_URL}"
 token="${TOKEN}"
+ping_interval=10
+ping_timeout=10
 auto_update=${AUTO_UPDATE}
 update_check_interval=300
 update_check_on_startup=true
