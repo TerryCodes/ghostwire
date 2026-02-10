@@ -29,6 +29,8 @@ listen_port={ws_port}
 websocket_path="/ws"
 auto_update=false
 ping_timeout=30
+ws_pool_enabled=true
+ws_pool_children=4
 
 [auth]
 token="test_token_123456"

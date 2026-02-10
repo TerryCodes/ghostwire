@@ -275,7 +275,7 @@ class GhostWireServer:
                     except ValueError:
                         break
                     if msg_type in (MSG_DATA,MSG_CLOSE,MSG_ERROR,MSG_INFO):
-                        if role=="main" and self.config.ws_pool_enabled:
+                        if role=="main" and self.config.ws_pool_enabled and msg_type==MSG_DATA:
                             logger.warning(f"Dropping non-control message on main channel: {msg_type}")
                             continue
                         await self.route_message(msg_type,conn_id,payload)
