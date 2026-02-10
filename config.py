@@ -78,6 +78,7 @@ class ServerConfig:
         self.panel_host=config.get("panel",{}).get("host","127.0.0.1")
         self.panel_port=config.get("panel",{}).get("port",9090)
         self.panel_path=config.get("panel",{}).get("path","")
+        self.panel_threads=config.get("panel",{}).get("threads",4)
 
 class ClientConfig:
     def __init__(self,config_path):

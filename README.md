@@ -135,6 +135,7 @@ enabled=true
 host="127.0.0.1"
 port=9090
 path="aBcDeFgHiJkLmNoPqRsT"
+threads=4
 
 [logging]
 level="info"
@@ -148,7 +149,7 @@ file="/var/log/ghostwire-server.log"
 - Service control (restart/stop)
 - Configuration editor
 
-The panel is accessible at `http://127.0.0.1:9090/{path}/` where `path` is a randomly generated nanoid. Access is restricted to localhost by default for security.
+The panel is accessible at `http://127.0.0.1:9090/{path}/` where `path` is a randomly generated nanoid. Access is restricted to localhost by default for security. The `threads` parameter (default: 4) controls the number of worker threads for the panel's HTTP server - increase for high traffic.
 
 ### Client Configuration (`/etc/ghostwire/client.toml`)
 

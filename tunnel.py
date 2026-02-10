@@ -67,6 +67,7 @@ class TunnelConnection:
 class TunnelManager:
     def __init__(self):
         self.connections={}
+        self.connection_locks={}
         self.next_conn_id=1
 
     def generate_conn_id(self):
@@ -76,12 +77,17 @@ class TunnelManager:
 
     def add_connection(self,conn_id,connection):
         self.connections[conn_id]=connection
+        self.connection_locks[conn_id]=asyncio.Lock()
 
     def get_connection(self,conn_id):
         return self.connections.get(conn_id)
 
+    def get_connection_lock(self,conn_id):
+        return self.connection_locks.get(conn_id)
+
     def remove_connection(self,conn_id):
         conn=self.connections.pop(conn_id,None)
+        self.connection_locks.pop(conn_id,None)
         if conn:
             try:
                 if isinstance(conn,tuple):
@@ -103,3 +109,4 @@ class TunnelManager:
             except:
                 pass
         self.connections.clear()
+        self.connection_locks.clear()

@@ -31,24 +31,92 @@ async def traffic_generator(duration=30):
     print(f"  📊 Traffic stats: {success} success, {fail} failures")
     return success,fail
 
+def get_free_port():
+    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    s.bind(("127.0.0.1",0))
+    port=s.getsockname()[1]
+    s.close()
+    return port
+
+def write_test_configs(ws_port,tunnel_port,target_port):
+    server_cfg=f"""[server]
+listen_host="127.0.0.1"
+listen_port={ws_port}
+websocket_path="/ws"
+auto_update=false
+
+[auth]
+token="test_token_123456"
+
+[tunnels]
+ports=["{tunnel_port}={target_port}"]
+
+[logging]
+level="info"
+file="/tmp/ghostwire-test-server.log"
+"""
+    client_cfg=f"""[server]
+url="ws://127.0.0.1:{ws_port}/ws"
+token="test_token_123456"
+auto_update=false
+
+[reconnect]
+initial_delay=1
+max_delay=10
+multiplier=2
+
+[cloudflare]
+enabled=false
+ips=[]
+host=""
+check_interval=300
+
+[logging]
+level="info"
+file="/tmp/ghostwire-test-client.log"
+"""
+    server_path=f"/tmp/ghostwire-test-server-{ws_port}.toml"
+    client_path=f"/tmp/ghostwire-test-client-{ws_port}.toml"
+    with open(server_path,"w") as f:
+        f.write(server_cfg)
+    with open(client_path,"w") as f:
+        f.write(client_cfg)
+    return server_path,client_path
+
 async def test():
     print("🚀 Production Scenario Test")
     print("="*50)
     print("Simulating: Multiple reconnections with continuous traffic\n")
-    test_server=subprocess.Popen(["python3.13","-m","http.server","8888"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    ws_port=get_free_port()
+    tunnel_port=get_free_port()
+    target_port=get_free_port()
+    server_cfg,client_cfg=write_test_configs(ws_port,tunnel_port,target_port)
+    test_server=subprocess.Popen(["python3.13","-m","http.server",str(target_port)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     await asyncio.sleep(1)
-    server=subprocess.Popen(["python3.13","server.py","-c","test_server.toml"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+    server=subprocess.Popen(["python3.13","server.py","-c",server_cfg],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
     await asyncio.sleep(2)
     if server.poll() is not None:
         print("❌ Server failed to start")
         test_server.kill()
         return False
     print("✅ Server started")
-    client=subprocess.Popen(["python3.13","client.py","-c","test_client.toml"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    client=subprocess.Popen(["python3.13","client.py","-c",client_cfg],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     await asyncio.sleep(2)
     print("✅ Client started")
     print("\n🔄 Starting test: 3 reconnection cycles with traffic\n")
-    traffic_task=asyncio.create_task(traffic_generator(25))
+    async def dynamic_traffic():
+        start=time.time()
+        success=0
+        fail=0
+        while time.time()-start<25:
+            if await make_http_request(tunnel_port):
+                success+=1
+            else:
+                fail+=1
+            await asyncio.sleep(0.5)
+        print(f"  📊 Traffic stats: {success} success, {fail} failures")
+        return success,fail
+    traffic_task=asyncio.create_task(dynamic_traffic())
     for i in range(3):
         print(f"Cycle {i+1}/3:")
         await asyncio.sleep(5)
@@ -63,7 +131,7 @@ async def test():
             return False
         print("  ✅ Server survived disconnection")
         print("  🔌 Restarting client...")
-        client=subprocess.Popen(["python3.13","client.py","-c","test_client.toml"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        client=subprocess.Popen(["python3.13","client.py","-c",client_cfg],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         await asyncio.sleep(2)
         print("  ✅ Client reconnected")
     await traffic_task
