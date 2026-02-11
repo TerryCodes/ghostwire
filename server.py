@@ -104,15 +104,31 @@ class GhostWireServer:
             self.tunnel_manager.remove_connection(conn_id)
 
     async def sender_task(self,websocket,send_queue,control_queue,stop_event):
+        control_quota=16
+        control_count=0
         try:
             while not stop_event.is_set() or not send_queue.empty() or not control_queue.empty():
-                try:
-                    message=control_queue.get_nowait()
-                except asyncio.QueueEmpty:
+                message=None
+                if control_count<control_quota:
                     try:
-                        message=await asyncio.wait_for(send_queue.get(),timeout=0.1)
-                    except asyncio.TimeoutError:
-                        continue
+                        message=control_queue.get_nowait()
+                        control_count+=1
+                    except asyncio.QueueEmpty:
+                        pass
+                if message is None:
+                    try:
+                        message=send_queue.get_nowait()
+                        control_count=0
+                    except asyncio.QueueEmpty:
+                        try:
+                            message=await asyncio.wait_for(send_queue.get(),timeout=0.05)
+                            control_count=0
+                        except asyncio.TimeoutError:
+                            try:
+                                message=await asyncio.wait_for(control_queue.get(),timeout=0.05)
+                                control_count=min(control_count+1,control_quota)
+                            except asyncio.TimeoutError:
+                                continue
                 try:
                     await websocket.send(message)
                 except asyncio.TimeoutError:
@@ -337,7 +353,7 @@ class GhostWireServer:
     async def handle_local_connection(self,reader,writer,remote_ip,remote_port):
         conn_id=self.tunnel_manager.generate_conn_id()
         self.tunnel_manager.add_connection(conn_id,(reader,writer))
-        logger.info(f"New local connection {conn_id} -> {remote_ip}:{remote_port}")
+        logger.debug(f"New local connection {conn_id} -> {remote_ip}:{remote_port}")
         try:
             send_queue=self.send_queue
             control_queue=self.control_queue
@@ -383,7 +399,7 @@ class GhostWireServer:
     async def forward_local_to_websocket(self,conn_id,reader):
         try:
             while True:
-                data=await reader.read(65536)
+                data=await reader.read(262144)
                 if not data:
                     break
                 send_queue=self.send_queue

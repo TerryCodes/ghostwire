@@ -3,9 +3,9 @@ import asyncio
 import logging
 import os
 import sys
-import tempfile
 import hashlib
-import requests
+import json
+import aiohttp
 from pathlib import Path
 
 logger=logging.getLogger(__name__)
@@ -24,16 +24,40 @@ class Updater:
     def get_current_version(self):
         script_path=Path(sys.argv[0])
         if script_path.name.startswith(f"ghostwire-{self.component_name}"):
-            return "v0.7.1"
+            return "v0.7.2"
         return "dev"
+
+    async def http_get(self,url,timeout):
+        timeout_config=aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
+            async with session.get(url) as response:
+                status=response.status
+                body=await response.read()
+                return status,body
+
+    async def http_download(self,url,output_path,timeout):
+        timeout_config=aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
+            async with session.get(url) as response:
+                if response.status!=200:
+                    return response.status
+                with open(output_path,"wb") as f:
+                    async for chunk in response.content.iter_chunked(65536):
+                        f.write(chunk)
+                return 200
 
     async def check_for_update(self):
         try:
-            response=requests.get(self.check_url,timeout=10)
-            if response.status_code!=200:
-                logger.warning(f"Failed to check for updates: HTTP {response.status_code}")
+            status,body=await self.http_get(self.check_url,10)
+            if status!=200:
+                logger.warning(f"Failed to check for updates: HTTP {status}")
                 return None
-            data=response.json()
+            data={}
+            try:
+                data=json.loads(body.decode())
+            except Exception:
+                logger.warning("Failed to parse update response")
+                return None
             latest_version=data.get("tag_name")
             if not latest_version:
                 logger.warning("No tag_name in release data")
@@ -62,17 +86,14 @@ class Updater:
             tmpdir=f"/tmp/ghostwire-update-{self.component_name}-{os.getpid()}"
             os.makedirs(tmpdir,exist_ok=True)
             binary_path=os.path.join(tmpdir,f"ghostwire-{self.component_name}")
-            response=requests.get(binary_url,timeout=30,stream=True)
-            if response.status_code!=200:
-                logger.error(f"Failed to download binary: HTTP {response.status_code}")
+            status=await self.http_download(binary_url,binary_path,300)
+            if status!=200:
+                logger.error(f"Failed to download binary: HTTP {status}")
                 return False
-            with open(binary_path,"wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
             os.chmod(binary_path,0o755)
-            response=requests.get(checksum_url,timeout=10)
-            if response.status_code==200:
-                checksum_content=response.text.strip()
+            checksum_status,checksum_body=await self.http_get(checksum_url,30)
+            if checksum_status==200:
+                checksum_content=checksum_body.decode().strip()
                 parts=checksum_content.split()
                 expected_checksum=parts[0] if parts else checksum_content
                 if not self.verify_checksum(binary_path,expected_checksum):

@@ -134,15 +134,31 @@ class GhostWireClient:
             self.tunnel_manager.remove_connection(conn_id)
 
     async def sender_task(self,websocket,send_queue,control_queue,stop_event):
+        control_quota=16
+        control_count=0
         try:
             while not stop_event.is_set() or not send_queue.empty() or not control_queue.empty():
-                try:
-                    message=control_queue.get_nowait()
-                except asyncio.QueueEmpty:
+                message=None
+                if control_count<control_quota:
                     try:
-                        message=await asyncio.wait_for(send_queue.get(),timeout=0.1)
-                    except asyncio.TimeoutError:
-                        continue
+                        message=control_queue.get_nowait()
+                        control_count+=1
+                    except asyncio.QueueEmpty:
+                        pass
+                if message is None:
+                    try:
+                        message=send_queue.get_nowait()
+                        control_count=0
+                    except asyncio.QueueEmpty:
+                        try:
+                            message=await asyncio.wait_for(send_queue.get(),timeout=0.05)
+                            control_count=0
+                        except asyncio.TimeoutError:
+                            try:
+                                message=await asyncio.wait_for(control_queue.get(),timeout=0.05)
+                                control_count=min(control_count+1,control_quota)
+                            except asyncio.TimeoutError:
+                                continue
                 try:
                     await websocket.send(message)
                 except asyncio.TimeoutError:
@@ -321,7 +337,7 @@ class GhostWireClient:
         try:
             async with self.connect_semaphore:
                 channel_id=self.conn_channel_map.get(conn_id,"main")
-                logger.info(f"CONNECT request: {conn_id} -> {remote_ip}:{remote_port} via {channel_id}")
+                logger.debug(f"CONNECT request: {conn_id} -> {remote_ip}:{remote_port} via {channel_id}")
                 reader,writer=await asyncio.wait_for(asyncio.open_connection(remote_ip,remote_port),timeout=10)
             self.tunnel_manager.add_connection(conn_id,(reader,writer))
             buffered=self.preconnect_buffers.pop(conn_id,[])
@@ -341,7 +357,7 @@ class GhostWireClient:
     async def forward_remote_to_websocket(self,conn_id,reader):
         try:
             while True:
-                data=await reader.read(65536)
+                data=await reader.read(262144)
                 if not data:
                     break
                 channel_id=self.conn_channel_map.get(conn_id,"main")
@@ -392,7 +408,7 @@ class GhostWireClient:
                     if msg_type==MSG_CONNECT:
                         remote_ip,remote_port=unpack_connect(payload)
                         self.conn_channel_map[conn_id]=channel_id
-                        logger.info(f"Routing connection {conn_id} via {channel_id}")
+                        logger.debug(f"Routing connection {conn_id} via {channel_id}")
                         self.spawn_connect_task(conn_id,remote_ip,remote_port)
                     elif msg_type==MSG_DATA:
                         await self.handle_data(conn_id,payload)
