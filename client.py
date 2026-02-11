@@ -56,7 +56,7 @@ class GhostWireClient:
         self.channel_stop_events={}
         self.child_worker_tasks={}
         self.desired_child_count=0
-        self.updater=Updater("client",check_interval=config.update_check_interval,check_on_startup=config.update_check_on_startup)
+        self.updater=Updater("client",check_interval=config.update_check_interval,check_on_startup=config.update_check_on_startup,http_proxy=config.update_http_proxy,https_proxy=config.update_https_proxy)
 
     def clear_conn_writers(self):
         for conn_id,task in list(self.conn_write_tasks.items()):
@@ -137,6 +137,8 @@ class GhostWireClient:
                     written+=len(p)
                     queue.task_done()
                 await asyncio.wait_for(writer.drain(),timeout=120)
+        except asyncio.CancelledError:
+            logger.debug(f"Writer task canceled for {conn_id}")
         except asyncio.TimeoutError:
             logger.warning(f"Write timeout for remote connection {conn_id}")
         except Exception as e:

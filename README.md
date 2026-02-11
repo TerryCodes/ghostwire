@@ -193,6 +193,15 @@ Both server and client support automatic updates from GitHub releases:
 
 When an update is found, the binary is downloaded, verified with SHA-256 checksum, and the service restarts automatically via systemd.
 
+**HTTP/HTTPS Proxy for Updates:** If your server or client needs to use a proxy to reach GitHub for auto-updates, add these options to the `[server]` section:
+
+```toml
+update_http_proxy="http://127.0.0.1:8080"
+update_https_proxy="http://127.0.0.1:8080"
+```
+
+These proxy settings **only affect auto-update downloads** from GitHub. They do not affect tunnel traffic. Leave empty (or omit) if no proxy is needed.
+
 ## Proxy Configuration
 
 ### nginx (manual setup)

@@ -13,10 +13,12 @@ logger=logging.getLogger(__name__)
 GITHUB_REPO="frenchtoblerone54/ghostwire"
 
 class Updater:
-    def __init__(self,component_name,check_interval=300,check_on_startup=True):
+    def __init__(self,component_name,check_interval=300,check_on_startup=True,http_proxy="",https_proxy=""):
         self.component_name=component_name
         self.check_interval=check_interval
         self.check_on_startup=check_on_startup
+        self.http_proxy=http_proxy
+        self.https_proxy=https_proxy
         self.current_version=self.get_current_version()
         self.update_url=f"https://github.com/{GITHUB_REPO}/releases/latest/download/ghostwire-{component_name}"
         self.check_url=f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -24,21 +26,23 @@ class Updater:
     def get_current_version(self):
         script_path=Path(sys.argv[0])
         if script_path.name.startswith(f"ghostwire-{self.component_name}"):
-            return "v0.8.2"
+            return "v0.8.3"
         return "dev"
 
     async def http_get(self,url,timeout):
         timeout_config=aiohttp.ClientTimeout(total=timeout)
+        proxy=self.https_proxy if url.startswith("https://") else self.http_proxy
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
-            async with session.get(url) as response:
+            async with session.get(url,proxy=proxy if proxy else None) as response:
                 status=response.status
                 body=await response.read()
                 return status,body
 
     async def http_download(self,url,output_path,timeout):
         timeout_config=aiohttp.ClientTimeout(total=timeout)
+        proxy=self.https_proxy if url.startswith("https://") else self.http_proxy
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
-            async with session.get(url) as response:
+            async with session.get(url,proxy=proxy if proxy else None) as response:
                 if response.status!=200:
                     return response.status
                 with open(output_path,"wb") as f:
