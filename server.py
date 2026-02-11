@@ -2,7 +2,6 @@
 import asyncio
 import logging
 import signal
-import socket
 import sys
 import time
 import struct
@@ -103,7 +102,7 @@ class GhostWireServer:
                         break
                     if p is None:
                         queue.task_done()
-                        await asyncio.wait_for(writer.drain(),timeout=15)
+                        await asyncio.wait_for(writer.drain(),timeout=60)
                         return
                     writer.write(p)
                     written+=len(p)
@@ -384,9 +383,6 @@ class GhostWireServer:
 
     async def handle_local_connection(self,reader,writer,remote_ip,remote_port):
         conn_id=self.tunnel_manager.generate_conn_id()
-        sock=writer.get_extra_info("socket")
-        if sock:
-            sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
         self.tunnel_manager.add_connection(conn_id,(reader,writer))
         logger.debug(f"New local connection {conn_id} -> {remote_ip}:{remote_port}")
         try:
@@ -449,7 +445,7 @@ class GhostWireServer:
                     send_queue.put_nowait(message)
                 except asyncio.QueueFull:
                     try:
-                        await asyncio.wait_for(send_queue.put(message),timeout=15)
+                        await asyncio.wait_for(send_queue.put(message),timeout=30)
                     except asyncio.TimeoutError:
                         logger.warning(f"Send queue stalled for {conn_id}, closing connection")
                         break
