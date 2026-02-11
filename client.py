@@ -367,15 +367,18 @@ class GhostWireClient:
                     logger.debug(f"Send queue unavailable, stopping forward for {conn_id}")
                     break
                 message=pack_data(conn_id,data,self.key)
-                try:
-                    while self.running and send_queue:
-                        try:
-                            await asyncio.wait_for(send_queue.put(message),timeout=1)
+                retry_count=0
+                max_retries=3
+                while self.running and send_queue and retry_count<max_retries:
+                    try:
+                        await asyncio.wait_for(send_queue.put(message),timeout=0.2)
+                        break
+                    except asyncio.TimeoutError:
+                        retry_count+=1
+                        if retry_count>=max_retries:
+                            logger.warning(f"Send queue stalled for {conn_id}, closing connection")
                             break
-                        except asyncio.TimeoutError:
-                            continue
-                except AttributeError:
-                    logger.warning(f"Send queue unavailable for {conn_id}")
+                if retry_count>=max_retries:
                     break
         except Exception as e:
             logger.debug(f"Forward error for {conn_id}: {e}")
@@ -445,7 +448,13 @@ class GhostWireClient:
         finally:
             if channel_id!="main":
                 affected=[conn_id for conn_id,mapped_channel in self.conn_channel_map.items() if mapped_channel==channel_id]
+                available_children=[cid for cid,ch in self.child_channels.items() if cid!=channel_id and ch.get("ws") and getattr(ch.get("ws"),"close_code",None) is None]
                 for conn_id in affected:
+                    if available_children:
+                        new_channel=available_children[0]
+                        self.conn_channel_map[conn_id]=new_channel
+                        logger.debug(f"Reassigned {conn_id} from {channel_id} to {new_channel}")
+                        continue
                     self.conn_channel_map.pop(conn_id,None)
                     self.preconnect_buffers.pop(conn_id,None)
                     await self.close_conn_writer(conn_id,flush=False)
@@ -466,13 +475,14 @@ class GhostWireClient:
             try:
                 queue=self.conn_write_queues.get(conn_id)
                 if not queue:
-                    queue=asyncio.Queue(maxsize=1024)
+                    queue=asyncio.Queue(maxsize=2048)
                     self.conn_write_queues[conn_id]=queue
                     self.conn_write_tasks[conn_id]=asyncio.create_task(self.conn_writer_loop(conn_id,writer,queue))
-                queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                logger.warning(f"Write queue full for remote connection {conn_id}")
-                await self.close_conn_writer(conn_id,flush=False)
+                try:
+                    await asyncio.wait_for(queue.put(payload),timeout=0.5)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Write queue timeout for remote connection {conn_id}, closing")
+                    await self.close_conn_writer(conn_id,flush=False)
             except Exception as e:
                 logger.error(f"Error writing to remote connection {conn_id}: {e}")
                 self.tunnel_manager.remove_connection(conn_id)

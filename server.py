@@ -50,6 +50,7 @@ class GhostWireServer:
         self.child_channels={}
         self.conn_channel_map={}
         self.child_rr_index=0
+        self.child_queue_sizes={}
         logger.info("Generating RSA key pair for secure authentication...")
         self.private_key,self.public_key=generate_rsa_keypair()
         self.updater=Updater("server",check_interval=config.update_check_interval,check_on_startup=config.update_check_on_startup)
@@ -145,6 +146,21 @@ class GhostWireServer:
         child_ids=self.get_available_child_ids()
         if not child_ids:
             return None
+        best_child=None
+        min_load=float("inf")
+        for child_id in child_ids:
+            channel=self.child_channels.get(child_id)
+            if not channel:
+                continue
+            send_queue=channel.get("send_queue")
+            conn_count=sum(1 for mapped_child in self.conn_channel_map.values() if mapped_child==child_id)
+            queue_depth=send_queue.qsize() if send_queue else 0
+            load_score=queue_depth+conn_count*10
+            if load_score<min_load:
+                min_load=load_score
+                best_child=child_id
+        if best_child:
+            return best_child
         child_id=child_ids[self.child_rr_index%len(child_ids)]
         self.child_rr_index+=1
         return child_id
@@ -171,10 +187,21 @@ class GhostWireServer:
 
     async def close_connections_for_child(self,child_id):
         affected=[conn_id for conn_id,mapped_child in self.conn_channel_map.items() if mapped_child==child_id]
-        for conn_id in affected:
-            self.conn_channel_map.pop(conn_id,None)
-            await self.close_conn_writer(conn_id,flush=False)
-            self.tunnel_manager.remove_connection(conn_id)
+        alternative_children=self.get_available_child_ids()
+        if not alternative_children:
+            logger.warning(f"Child {child_id} lost, closing {len(affected)} connections (no alternatives)")
+            for conn_id in affected:
+                self.conn_channel_map.pop(conn_id,None)
+                await self.close_conn_writer(conn_id,flush=False)
+                self.tunnel_manager.remove_connection(conn_id)
+        else:
+            logger.info(f"Child {child_id} lost, reassigning {len(affected)} connections to other children")
+            reassign_index=0
+            for conn_id in affected:
+                new_child=alternative_children[reassign_index%len(alternative_children)]
+                reassign_index+=1
+                self.conn_channel_map[conn_id]=new_child
+                logger.debug(f"Reassigned connection {conn_id} from {child_id} to {new_child}")
 
     async def route_message(self,msg_type,conn_id,payload):
         if msg_type==MSG_DATA:
@@ -400,6 +427,7 @@ class GhostWireServer:
                 if not data:
                     break
                 send_queue=self.send_queue
+                mapped_child=None
                 if self.config.ws_pool_enabled:
                     mapped_child=self.conn_channel_map.get(conn_id)
                     if not mapped_child:
@@ -412,15 +440,18 @@ class GhostWireServer:
                     logger.debug(f"Client disconnected, stopping forward for {conn_id}")
                     break
                 message=pack_data(conn_id,data,self.key)
-                try:
-                    while self.running and send_queue:
-                        try:
-                            await asyncio.wait_for(send_queue.put(message),timeout=1)
+                retry_count=0
+                max_retries=3
+                while self.running and send_queue and retry_count<max_retries:
+                    try:
+                        await asyncio.wait_for(send_queue.put(message),timeout=0.2)
+                        break
+                    except asyncio.TimeoutError:
+                        retry_count+=1
+                        if retry_count>=max_retries:
+                            logger.warning(f"Send queue stalled for {conn_id}, closing connection")
                             break
-                        except asyncio.TimeoutError:
-                            continue
-                except AttributeError:
-                    logger.warning(f"Send queue unavailable for {conn_id}")
+                if retry_count>=max_retries:
                     break
         except Exception as e:
             logger.debug(f"Forward error for {conn_id}: {e}")
@@ -430,6 +461,7 @@ class GhostWireServer:
                 if self.config.ws_pool_enabled:
                     mapped_child=self.conn_channel_map.get(conn_id)
                     if mapped_child:
+                        self.child_queue_sizes[mapped_child]=max(0,self.child_queue_sizes.get(mapped_child,0)-1)
                         channel=self.child_channels.get(mapped_child)
                         if channel:
                             control_queue=channel.get("control_queue")
@@ -447,13 +479,13 @@ class GhostWireServer:
             try:
                 queue=self.conn_write_queues.get(conn_id)
                 if not queue:
-                    queue=asyncio.Queue(maxsize=1024)
+                    queue=asyncio.Queue(maxsize=2048)
                     self.conn_write_queues[conn_id]=queue
                     self.conn_write_tasks[conn_id]=asyncio.create_task(self.conn_writer_loop(conn_id,writer,queue))
-                queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                logger.warning(f"Write queue full for local connection {conn_id}")
-                await self.close_conn_writer(conn_id,flush=False)
+                try:
+                    await asyncio.wait_for(queue.put(payload),timeout=5)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Write queue saturated for local connection {conn_id}, applying backpressure")
             except Exception as e:
                 logger.error(f"Error writing to local connection {conn_id}: {e}")
                 self.tunnel_manager.remove_connection(conn_id)
