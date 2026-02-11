@@ -481,12 +481,21 @@ class GhostWireClient:
         while self.running:
             try:
                 await asyncio.sleep(self.ping_interval)
-                if self.main_websocket and self.main_control_queue:
+                if self.main_websocket:
                     timestamp=int(time.time()*1000)
-                    try:
-                        self.main_control_queue.put_nowait(pack_ping(timestamp,self.key))
-                    except (asyncio.QueueFull,AttributeError):
-                        logger.warning(f"Control queue unavailable, skipping ping")
+                    if self.main_control_queue:
+                        try:
+                            self.main_control_queue.put_nowait(pack_ping(timestamp,self.key))
+                        except (asyncio.QueueFull,AttributeError):
+                            logger.warning(f"Control queue unavailable, skipping ping")
+                    for _,channel in list(self.child_channels.items()):
+                        control_queue=channel.get("control_queue") if channel else None
+                        if not control_queue:
+                            continue
+                        try:
+                            control_queue.put_nowait(pack_ping(timestamp,self.key))
+                        except (asyncio.QueueFull,AttributeError):
+                            pass
             except Exception as e:
                 logger.debug(f"Ping error: {e}")
                 break
