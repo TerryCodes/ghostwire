@@ -25,13 +25,27 @@ class HTTP2ServerHandler:
         self.ping_timeout=server_instance.ping_timeout
     async def handle_tunnel(self,reader,writer):
         peer=writer.get_extra_info('peername')
-        logger.info(f"HTTP/2 client connected: {peer}")
+        logger.info(f"Client connected: {peer}")
+        preface=await reader.read(24)
+        if preface.startswith(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"):
+            logger.info(f"HTTP/2 protocol detected from {peer}")
+            await self._handle_http2(reader,writer,preface,peer)
+        elif preface.startswith(b"GET") or preface.startswith(b"POST"):
+            logger.info(f"HTTP/1.1 protocol detected from {peer}")
+            await self._handle_http11(reader,writer,preface,peer)
+        else:
+            logger.error(f"Unknown protocol from {peer}: {preface[:20]}")
+            writer.close()
+            await writer.wait_closed()
+    async def _handle_http2(self,reader,writer,preface,peer):
         config=H2Configuration(client_side=False)
         conn=H2Connection(config=config)
         conn_lock=asyncio.Lock()
         window_event=asyncio.Event()
         window_event.set()
         conn.initiate_connection()
+        async with conn_lock:
+            conn.receive_data(preface)
         writer.write(conn.data_to_send())
         await writer.drain()
         key=None
@@ -159,6 +173,108 @@ class HTTP2ServerHandler:
             except:
                 pass
             logger.info(f"HTTP/2 client disconnected: {peer}")
+    async def _handle_http11(self,reader,writer,preface,peer):
+        key=None
+        last_ping_time=[time.time()]
+        send_queue=asyncio.Queue(maxsize=512)
+        conn_write_queues={}
+        stop_event=asyncio.Event()
+        sender_task=None
+        ping_task=None
+        try:
+            while b"\r\n\r\n" not in preface:
+                chunk=await reader.read(1024)
+                if not chunk:
+                    return
+                preface+=chunk
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+            await writer.drain()
+            pubkey_msg=pack_pubkey(self.public_key)
+            writer.write(struct.pack("!I",len(pubkey_msg))+pubkey_msg)
+            await writer.drain()
+            auth_len_data=await asyncio.wait_for(reader.readexactly(4),timeout=30)
+            auth_len=struct.unpack("!I",auth_len_data)[0]
+            auth_data=await asyncio.wait_for(reader.readexactly(auth_len),timeout=30)
+            auth_type,_,encrypted_token,_=unpack_message(auth_data,None)
+            if auth_type!=MSG_AUTH:
+                raise ValueError("Expected auth message")
+            client_token=rsa_decrypt(self.private_key,encrypted_token)
+            token_str,_,_=unpack_auth_payload(client_token)
+            if token_str!=self.token:
+                raise ValueError("Invalid token")
+            pubkey_len_data=await asyncio.wait_for(reader.readexactly(4),timeout=30)
+            pubkey_len=struct.unpack("!I",pubkey_len_data)[0]
+            pubkey_data=await asyncio.wait_for(reader.readexactly(pubkey_len),timeout=30)
+            pubkey_type,_,client_pubkey,_=unpack_message(pubkey_data,None)
+            if pubkey_type!=MSG_PUBKEY:
+                raise ValueError("Expected public key")
+            client_public_key=deserialize_public_key(client_pubkey)
+            key=derive_key(self.token)
+            session_msg=pack_session_key(key,client_public_key)
+            writer.write(struct.pack("!I",len(session_msg))+session_msg)
+            await writer.drain()
+            logger.info(f"HTTP/1.1 client authenticated: {peer}")
+            self.server.websocket=True
+            self.server.key=key
+            self.server.send_queue=send_queue
+            self.server.control_queue=send_queue
+            if not self.server.listeners:
+                await self.server.start_listeners()
+            sender_task=asyncio.create_task(self._http11_sender_loop(writer,send_queue,stop_event))
+            ping_task=asyncio.create_task(self._ping_monitor(last_ping_time,stop_event,send_queue,key))
+            while not stop_event.is_set():
+                msg_len_data=await reader.readexactly(4)
+                msg_len=struct.unpack("!I",msg_len_data)[0]
+                msg_data=await reader.readexactly(msg_len)
+                msg_type,conn_id,payload,_=unpack_message(msg_data,key)
+                if msg_type==MSG_INFO:
+                    self.server.client_version=payload.decode()
+                    logger.info(f"Client version: {self.server.client_version}")
+                elif msg_type==MSG_PING:
+                    pong_msg=pack_pong(struct.unpack("!Q",payload)[0],key)
+                    await send_queue.put(pong_msg)
+                elif msg_type==MSG_PONG:
+                    last_ping_time[0]=time.time()
+                elif msg_type==MSG_CONNECT:
+                    remote_ip,remote_port=unpack_connect(payload)
+                    logger.debug(f"CONNECT from client: {conn_id} -> {remote_ip}:{remote_port}")
+                elif msg_type==MSG_DATA:
+                    await self.server.handle_data(conn_id,payload)
+                elif msg_type==MSG_CLOSE:
+                    await self.server.handle_close(conn_id)
+        except asyncio.CancelledError:
+            logger.info(f"HTTP/1.1 client cancelled: {peer}")
+        except Exception as e:
+            logger.error(f"HTTP/1.1 client error: {e}")
+        finally:
+            stop_event.set()
+            if sender_task and not sender_task.done():
+                sender_task.cancel()
+            if ping_task and not ping_task.done():
+                ping_task.cancel()
+            self.server.websocket=None
+            self.server.key=None
+            self.server.send_queue=None
+            self.server.control_queue=None
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except:
+                pass
+            logger.info(f"HTTP/1.1 client disconnected: {peer}")
+    async def _http11_sender_loop(self,writer,send_queue,stop_event):
+        try:
+            while not stop_event.is_set():
+                msg=await send_queue.get()
+                if msg is None:
+                    break
+                writer.write(struct.pack("!I",len(msg))+msg)
+                await writer.drain()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"HTTP/1.1 sender error: {e}")
+            stop_event.set()
     async def _flush_outbound(self,conn,writer,conn_lock):
         async with conn_lock:
             outbound=conn.data_to_send()
