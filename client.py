@@ -31,6 +31,7 @@ class GhostWireClient:
         self.websocket=None
         self.main_websocket=None
         self.http2_transport=None
+        self.grpc_transport=None
         self.key=None
         self.running=False
         self.reconnect_delay=config.initial_delay
@@ -230,6 +231,75 @@ class GhostWireClient:
         finally:
             logger.debug("HTTP/2 sender task stopped")
 
+    async def grpc_receive_messages(self,transport,channel_id):
+        buffer=bytearray()
+        try:
+            while transport.connected:
+                if channel_id=="main":
+                    self.last_ping_time=time.time()
+                    self.last_rx_time=time.time()
+                try:
+                    msg_data=await transport.recv()
+                    if not msg_data:
+                        break
+                except EOFError:
+                    break
+                buffer.extend(msg_data)
+                while len(buffer)>=9:
+                    try:
+                        msg_type,conn_id,payload,consumed=unpack_message(buffer,self.key)
+                        del buffer[:consumed]
+                    except ValueError:
+                        break
+                    if msg_type==MSG_CONNECT:
+                        remote_ip,remote_port=unpack_connect(payload)
+                        self.conn_channel_map[conn_id]=channel_id
+                        logger.debug(f"Routing connection {conn_id} via {channel_id}")
+                        self.spawn_connect_task(conn_id,remote_ip,remote_port)
+                    elif msg_type==MSG_DATA:
+                        await self.handle_data(conn_id,payload)
+                    elif msg_type==MSG_CLOSE:
+                        self.conn_channel_map.pop(conn_id,None)
+                        self.preconnect_buffers.pop(conn_id,None)
+                        queue=self.conn_write_queues.get(conn_id)
+                        if queue:
+                            try:
+                                queue.put_nowait(None)
+                            except asyncio.QueueFull:
+                                task=self.conn_write_tasks.get(conn_id)
+                                if task:
+                                    task.cancel()
+                                self.conn_write_queues.pop(conn_id,None)
+                                self.conn_write_tasks.pop(conn_id,None)
+                                self.tunnel_manager.remove_connection(conn_id)
+                        else:
+                            self.tunnel_manager.remove_connection(conn_id)
+                    elif msg_type==MSG_ERROR:
+                        logger.error(f"Server error for {conn_id}: {payload.decode()}")
+                        self.conn_channel_map.pop(conn_id,None)
+                        self.tunnel_manager.remove_connection(conn_id)
+                    elif msg_type==MSG_PING:
+                        timestamp=struct.unpack("!Q",payload)[0]
+                        if channel_id=="main":
+                            self.last_ping_time=time.time()
+                        try:
+                            channel=self.get_channel(channel_id)
+                            control_queue=channel.get("control_queue") if channel else None
+                            if control_queue:
+                                control_queue.put_nowait(pack_pong(timestamp,self.key))
+                        except (asyncio.QueueFull,AttributeError):
+                            pass
+                    elif msg_type==MSG_PONG:
+                        if channel_id=="main":
+                            self.last_pong_time=time.time()
+                    elif msg_type==MSG_CHILD_CFG and channel_id=="main":
+                        child_count=unpack_child_cfg(payload)
+                        await self.sync_child_workers(child_count)
+        except EOFError:
+            logger.warning(f"gRPC connection closed by server channel={channel_id}")
+        except Exception as e:
+            logger.error(f"gRPC receive error channel={channel_id}: {e}",exc_info=True)
+
     async def http2_receive_messages(self,transport,channel_id):
         try:
             while transport.connected:
@@ -291,6 +361,8 @@ class GhostWireClient:
         if channel_id=="main":
             if self.config.protocol=="http2":
                 return {"transport":self.http2_transport,"send_queue":self.main_send_queue,"control_queue":self.main_control_queue}
+            elif self.config.protocol=="grpc":
+                return {"transport":self.grpc_transport,"send_queue":self.main_send_queue,"control_queue":self.main_control_queue}
             else:
                 return {"ws":self.main_websocket,"send_queue":self.main_send_queue,"control_queue":self.main_control_queue}
         return self.child_channels.get(channel_id)
@@ -391,6 +463,20 @@ class GhostWireClient:
                 self.last_rx_time=time.time()
                 info_msg=pack_info(self.updater.current_version,self.key)
                 await self.http2_transport.send(info_msg)
+                self.reconnect_delay=self.config.initial_delay
+                return True
+            elif self.config.protocol=="grpc":
+                from grpc_transport import GrpcClientTransport
+                self.grpc_transport=GrpcClientTransport(server_url,self.config.token)
+                success=await self.grpc_transport.connect()
+                if not success:
+                    return False
+                self.key=self.grpc_transport.key
+                self.last_ping_time=time.time()
+                self.last_pong_time=time.time()
+                self.last_rx_time=time.time()
+                info_msg=pack_info(self.updater.current_version,self.key)
+                await self.grpc_transport.send(info_msg)
                 self.reconnect_delay=self.config.initial_delay
                 return True
             else:
@@ -637,7 +723,8 @@ class GhostWireClient:
             try:
                 await asyncio.sleep(self.ping_interval)
                 http2_alive=self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected
-                if self.main_websocket or http2_alive:
+                grpc_alive=self.config.protocol=="grpc" and self.grpc_transport and self.grpc_transport.connected
+                if self.main_websocket or http2_alive or grpc_alive:
                     timestamp=int(time.time()*1000)
                     if self.main_control_queue:
                         try:
@@ -657,7 +744,7 @@ class GhostWireClient:
                 break
 
     async def ping_timeout_monitor(self):
-        while self.running and (self.main_websocket or (self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected)):
+        while self.running and (self.main_websocket or (self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected) or (self.config.protocol=="grpc" and self.grpc_transport and self.grpc_transport.connected)):
             await asyncio.sleep(15)
             now=time.time()
             last_activity=max(self.last_rx_time,self.last_pong_time)
@@ -665,6 +752,8 @@ class GhostWireClient:
                 logger.warning("Server ping timeout, closing connection")
                 if self.config.protocol=="http2" and self.http2_transport:
                     await self.http2_transport.close()
+                elif self.config.protocol=="grpc" and self.grpc_transport:
+                    await self.grpc_transport.close()
                 elif self.main_websocket:
                     await self.main_websocket.close()
                 break
@@ -687,6 +776,9 @@ class GhostWireClient:
                     if self.config.protocol=="http2":
                         sender_task=asyncio.create_task(self.http2_sender_task(self.http2_transport,send_queue,control_queue,stop_event))
                         receive_task=asyncio.create_task(self.http2_receive_messages(self.http2_transport,"main"))
+                    elif self.config.protocol=="grpc":
+                        sender_task=asyncio.create_task(self.http2_sender_task(self.grpc_transport,send_queue,control_queue,stop_event))
+                        receive_task=asyncio.create_task(self.grpc_receive_messages(self.grpc_transport,"main"))
                     else:
                         sender_task=asyncio.create_task(self.sender_task(self.main_websocket,send_queue,control_queue,stop_event))
                         receive_task=asyncio.create_task(self.receive_messages(self.main_websocket,"main"))
@@ -728,6 +820,13 @@ class GhostWireClient:
                             except:
                                 pass
                         self.http2_transport=None
+                    elif self.config.protocol=="grpc":
+                        if self.grpc_transport:
+                            try:
+                                await asyncio.wait_for(self.grpc_transport.close(),timeout=2)
+                            except:
+                                pass
+                        self.grpc_transport=None
                     else:
                         if self.main_websocket:
                             try:

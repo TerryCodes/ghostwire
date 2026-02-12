@@ -1,0 +1,8 @@
+syntax = "proto3";
+package ghostwire;
+service Tunnel {
+  rpc Stream(stream TunnelMessage) returns (stream TunnelMessage) {}
+}
+message TunnelMessage {
+  bytes data = 1;
+}

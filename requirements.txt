@@ -1,6 +1,8 @@
 websockets>=13.0
 httpx[http2]>=0.27.0
 h2>=4.1.0
+grpclib>=0.4.7
+protobuf>=4.25.0
 cryptography>=42.0.0
 nanoid>=2.0.0
 pyinstaller>=6.0.0

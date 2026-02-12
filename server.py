@@ -538,6 +538,9 @@ class GhostWireServer:
         if self.config.protocol=="http2":
             from http2_transport import start_http2_server
             await start_http2_server(self)
+        elif self.config.protocol=="grpc":
+            from grpc_transport import start_grpc_server
+            await start_grpc_server(self)
         else:
             async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,max_queue=512,ping_interval=None,compression=None,write_limit=65536,close_timeout=10,process_request=self.process_request):
                 await self.shutdown_event.wait()

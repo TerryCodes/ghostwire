@@ -22,7 +22,7 @@ def percentile(values,p):
 
 def write_test_configs(ws_port,tunnel_port,target_port):
     server_cfg=f"""[server]
-protocol="http2"
+protocol="grpc"
 listen_host="127.0.0.1"
 listen_port={ws_port}
 websocket_path="/ws"
@@ -40,8 +40,8 @@ level="info"
 file="/tmp/ghostwire-bench-server.log"
 """
     client_cfg=f"""[server]
-protocol="http2"
-url="ws://127.0.0.1:{ws_port}/ws"
+protocol="grpc"
+url="http://127.0.0.1:{ws_port}/ws"
 token="test_token_123456"
 auto_update=false
 
