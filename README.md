@@ -4,13 +4,14 @@ GhostWire is a WebSocket-based reverse tunnel system designed to help users in c
 
 ## Features
 
+- **Multiple protocol support** - WebSocket, HTTP/2, and gRPC transports
 - **RSA-encrypted authentication** - Token invisible to TLS-terminating proxies (CloudFlare-proof)
 - **End-to-end AES-256-GCM encryption** - All tunnel data encrypted with PBKDF2-derived keys
 - **Reverse tunnel architecture** - Client connects TO server (bypasses outbound blocking)
-- **Single persistent WebSocket** - Bidirectional communication over TLS
+- **Bidirectional streaming** - Single persistent connection over TLS
 - **Flexible TCP port forwarding** - Port ranges, IP binding, custom mappings
 - **Built-in heartbeat** - Transport and application-layer keepalive
-- **CloudFlare compatible** - Works behind TLS-terminating proxies
+- **CloudFlare compatible** - Works behind TLS-terminating proxies (with WebSocket/HTTP/2)
 - **Web management panel** - Real-time system monitoring, tunnel config, logs, service control
 - **nginx reverse proxy** - Production-ready setup with Let's Encrypt
 - **Compiled binaries** - Linux amd64 (Ubuntu 22.04+ compatible)
@@ -116,7 +117,7 @@ ports=[
 
 ```toml
 [server]
-protocol="websocket"       # "websocket" (default) or "http2" (for DNS-only mode)
+protocol="websocket"       # "websocket" (default), "http2", or "grpc"
 listen_host="0.0.0.0"
 listen_port=8443
 listen_backlog=4096        # TCP listen queue depth
@@ -179,8 +180,8 @@ For web browsing with hundreds of concurrent connections (typical modern website
 
 ```toml
 [server]
-protocol="websocket"       # "websocket" (default) or "http2" (for DNS-only mode)
-url="wss://tunnel.example.com/ws"  # Works for both protocols
+protocol="websocket"       # "websocket" (default), "http2", or "grpc"
+url="wss://tunnel.example.com/ws"  # Use wss:// for websocket, https:// for http2/grpc
 token="V1StGXR8_Z5jdHi6B-my"
 ping_interval=30           # Application-level ping interval (seconds)
 ping_timeout=60            # Connection timeout (seconds)
@@ -224,12 +225,94 @@ update_https_proxy="http://127.0.0.1:8080"
 
 These proxy settings **only affect auto-update downloads** from GitHub. They do not affect tunnel traffic. Leave empty (or omit) if no proxy is needed.
 
+## Protocol Options
+
+GhostWire supports three transport protocols, each with different trade-offs:
+
+### WebSocket Protocol (`protocol="websocket"`) - Default
+
+**Best for:** CloudFlare, general-purpose use, maximum compatibility
+
+- ✅ Works with CloudFlare (requires WebSockets enabled)
+- ✅ Simple browser-based debugging tools available
+- ✅ Widely supported by proxies and load balancers
+- ❌ HTTP/2-only proxies may block WebSocket upgrade (causes HTTP 426)
+- ❌ Requires special `Upgrade` header handling in nginx
+
+**Configuration:**
+```toml
+[server]
+protocol="websocket"
+url="wss://tunnel.example.com/ws"
+```
+
+### HTTP/2 Protocol (`protocol="http2"`) - Direct Connection
+
+**Best for:** Direct connections without CloudFlare, custom proxy setups
+
+- ✅ Native HTTP/2 streams (no WebSocket upgrade handshake)
+- ✅ Simple protocol debugging tools available
+- ✅ No protobuf overhead
+- ❌ **NOT compatible with CloudFlare** (raw HTTP/2 streams not supported)
+- ❌ Requires HTTP/2-capable proxy or direct connection
+
+**Configuration:**
+```toml
+[server]
+protocol="http2"
+url="https://tunnel.example.com/tunnel"  # Use /tunnel path
+```
+
+**Note:** Can also use `/ws` path for HTTP/2 (kept for consistency with WebSocket mode)
+
+**nginx config:**
+```nginx
+location /tunnel {
+    proxy_pass http://127.0.0.1:8443;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_read_timeout 86400s;
+}
+```
+
+### gRPC Protocol (`protocol="grpc"`) - CloudFlare Optimized
+
+**Best for:** CloudFlare with gRPC enabled, high-performance scenarios
+
+- ✅ **Compatible with CloudFlare** (requires Network → gRPC enabled)
+- ✅ Highest throughput efficiency (protobuf serialization)
+- ✅ Built-in streaming multiplexing
+- ✅ Lowest protocol overhead
+- ❌ Requires CloudFlare gRPC toggle or gRPC-aware proxy
+- ❌ More complex debugging
+
+**Configuration:**
+```toml
+[server]
+protocol="grpc"
+url="https://tunnel.example.com/tunnel"  # Use /tunnel path, not /ws
+```
+
+**nginx config for CloudFlare:**
+```nginx
+location /tunnel {
+    grpc_pass grpc://127.0.0.1:8443;
+    grpc_set_header Host $host;
+    grpc_read_timeout 86400s;
+    grpc_send_timeout 86400s;
+}
+```
+
+**Protocol Selection Guide:**
+- **Use WebSocket** if: Running through CloudFlare (most common), need maximum compatibility
+- **Use gRPC** if: Running through CloudFlare with gRPC enabled, want best performance
+- **Use HTTP/2** if: Direct connection without CloudFlare, custom proxy setup
+
 ## Proxy Configuration
 
 ### nginx (manual setup)
 
-For WebSocket proxying, ensure the nginx config includes these critical directives:
-
+**For WebSocket protocol:**
 ```nginx
 location /ws {
     proxy_pass http://127.0.0.1:8443;
@@ -246,10 +329,62 @@ location /ws {
 }
 ```
 
-`proxy_buffering off` and `proxy_request_buffering off` are critical — without these, nginx buffers WebSocket frames causing significant throughput degradation.
+**For HTTP/2 protocol:**
+```nginx
+location /tunnel {
+    proxy_pass http://127.0.0.1:8443;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_read_timeout 86400s;
+}
+```
+
+**For gRPC protocol:**
+```nginx
+location /tunnel {
+    grpc_pass grpc://127.0.0.1:8443;
+    grpc_set_header Host $host;
+    grpc_set_header X-Real-IP $remote_addr;
+    grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    grpc_read_timeout 86400s;
+    grpc_send_timeout 86400s;
+}
+```
+
+**For gRPC with CloudFlare:**
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name tunnel.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/tunnel.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tunnel.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    location /tunnel {
+        grpc_pass grpc://127.0.0.1:8443;
+        grpc_set_header Host $host;
+        grpc_set_header X-Real-IP $remote_addr;
+        grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        grpc_read_timeout 86400s;
+        grpc_send_timeout 86400s;
+    }
+}
+```
+
+Important notes for gRPC with nginx:
+- nginx 1.13.10+ required for gRPC support
+- Use `grpc_pass` instead of `proxy_pass`
+- Use `grpc_*` timeout directives instead of `proxy_*`
+- CloudFlare requires **Network → gRPC** toggle enabled
+- URL path is `/tunnel` for gRPC (not `/ws`)
+
+**Note:** `proxy_buffering off` and `proxy_request_buffering off` are critical for WebSocket — without these, nginx buffers frames causing significant throughput degradation.
 
 ### nginx Proxy Manager (NPM)
 
+**For WebSocket protocol:**
 1. Create a new Proxy Host pointing to `127.0.0.1:8443`
 2. Enable **"Websockets Support"** toggle on the Details tab
 3. Under the **Advanced** tab, add these custom directives:
@@ -262,15 +397,36 @@ proxy_request_buffering off;
 tcp_nodelay on;
 ```
 
-Without these timeouts, NPM will drop the persistent WebSocket connection after ~60 seconds.
+**For HTTP/2 or gRPC protocol:**
+- Use the same timeout directives
+- Do NOT enable "Websockets Support" toggle
+- For gRPC, NPM must support gRPC proxying (nginx 1.13.10+)
+
+Without these timeouts, NPM will drop the persistent connection after ~60 seconds.
 
 ### CloudFlare
 
+**Protocol Compatibility with CloudFlare:**
+
+| Protocol | CloudFlare Support | Notes |
+|-----------|-------------------|-------|
+| WebSocket | ✅ Yes (with config) | Requires Network → WebSockets ON |
+| gRPC | ✅ Yes (with config) | Requires Network → gRPC ON |
+| HTTP/2 | ❌ No | Not compatible - use direct connection |
+
 **CRITICAL: Required CloudFlare Dashboard Settings**
 
+For **WebSocket protocol**:
 1. **Network → WebSockets**: MUST be enabled (OFF by default - will cause disconnections!)
 2. **SSL/TLS → Overview**: Set to **Full (Strict)** (not "Flexible")
 3. **Speed → Rocket Loader**: Turn OFF (breaks WebSocket connections)
+4. **Speed → Auto Minify**: Disable all (HTML, CSS, JS)
+5. **Speed → Early Hints**: Turn OFF
+
+For **gRPC protocol**:
+1. **Network → gRPC**: MUST be enabled (OFF by default)
+2. **SSL/TLS → Overview**: Set to **Full (Strict)** (not "Flexible")
+3. **Speed → Rocket Loader**: Turn OFF
 4. **Speed → Auto Minify**: Disable all (HTML, CSS, JS)
 5. **Speed → Early Hints**: Turn OFF
 
