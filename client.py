@@ -30,6 +30,7 @@ class GhostWireClient:
         self.tunnel_manager=TunnelManager()
         self.websocket=None
         self.main_websocket=None
+        self.http2_transport=None
         self.key=None
         self.running=False
         self.reconnect_delay=config.initial_delay
@@ -194,9 +195,104 @@ class GhostWireClient:
         finally:
             logger.debug("Sender task stopped")
 
+    async def http2_sender_task(self,transport,send_queue,control_queue,stop_event):
+        try:
+            while not stop_event.is_set() or not send_queue.empty() or not control_queue.empty():
+                batch=[]
+                for _ in range(64):
+                    try:
+                        batch.append(control_queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+                for msg in batch:
+                    await transport.send(msg)
+                batch.clear()
+                try:
+                    msg=send_queue.get_nowait()
+                    await transport.send(msg)
+                except asyncio.QueueEmpty:
+                    control_get=asyncio.create_task(control_queue.get())
+                    data_get=asyncio.create_task(send_queue.get())
+                    stop_get=asyncio.create_task(stop_event.wait())
+                    done,pending=await asyncio.wait({control_get,data_get,stop_get},return_when=asyncio.FIRST_COMPLETED)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        await asyncio.gather(*pending,return_exceptions=True)
+                    if stop_get in done and control_get not in done and data_get not in done:
+                        break
+                    if control_get in done:
+                        await transport.send(control_get.result())
+                    if data_get in done:
+                        await transport.send(data_get.result())
+        except Exception as e:
+            logger.debug(f"HTTP/2 sender task error: {e}")
+        finally:
+            logger.debug("HTTP/2 sender task stopped")
+
+    async def http2_receive_messages(self,transport,channel_id):
+        try:
+            while transport.connected:
+                if channel_id=="main":
+                    self.last_ping_time=time.time()
+                    self.last_rx_time=time.time()
+                msg_data=await transport.recv()
+                msg_type,conn_id,payload,_=unpack_message(msg_data,self.key)
+                if msg_type==MSG_CONNECT:
+                    remote_ip,remote_port=unpack_connect(payload)
+                    self.conn_channel_map[conn_id]=channel_id
+                    logger.debug(f"Routing connection {conn_id} via {channel_id}")
+                    self.spawn_connect_task(conn_id,remote_ip,remote_port)
+                elif msg_type==MSG_DATA:
+                    await self.handle_data(conn_id,payload)
+                elif msg_type==MSG_CLOSE:
+                    self.conn_channel_map.pop(conn_id,None)
+                    self.preconnect_buffers.pop(conn_id,None)
+                    queue=self.conn_write_queues.get(conn_id)
+                    if queue:
+                        try:
+                            queue.put_nowait(None)
+                        except asyncio.QueueFull:
+                            task=self.conn_write_tasks.get(conn_id)
+                            if task:
+                                task.cancel()
+                            self.conn_write_queues.pop(conn_id,None)
+                            self.conn_write_tasks.pop(conn_id,None)
+                            self.tunnel_manager.remove_connection(conn_id)
+                    else:
+                        self.tunnel_manager.remove_connection(conn_id)
+                elif msg_type==MSG_ERROR:
+                    logger.error(f"Server error for {conn_id}: {payload.decode()}")
+                    self.conn_channel_map.pop(conn_id,None)
+                    self.tunnel_manager.remove_connection(conn_id)
+                elif msg_type==MSG_PING:
+                    timestamp=struct.unpack("!Q",payload)[0]
+                    if channel_id=="main":
+                        self.last_ping_time=time.time()
+                    try:
+                        channel=self.get_channel(channel_id)
+                        control_queue=channel.get("control_queue") if channel else None
+                        if control_queue:
+                            control_queue.put_nowait(pack_pong(timestamp,self.key))
+                    except (asyncio.QueueFull,AttributeError):
+                        pass
+                elif msg_type==MSG_PONG:
+                    if channel_id=="main":
+                        self.last_pong_time=time.time()
+                elif msg_type==MSG_CHILD_CFG and channel_id=="main":
+                    child_count=unpack_child_cfg(payload)
+                    await self.sync_child_workers(child_count)
+        except EOFError:
+            logger.warning(f"HTTP/2 connection closed by server channel={channel_id}")
+        except Exception as e:
+            logger.error(f"HTTP/2 receive error channel={channel_id}: {e}",exc_info=True)
+
     def get_channel(self,channel_id):
         if channel_id=="main":
-            return {"ws":self.main_websocket,"send_queue":self.main_send_queue,"control_queue":self.main_control_queue}
+            if self.config.protocol=="http2":
+                return {"transport":self.http2_transport,"send_queue":self.main_send_queue,"control_queue":self.main_control_queue}
+            else:
+                return {"ws":self.main_websocket,"send_queue":self.main_send_queue,"control_queue":self.main_control_queue}
         return self.child_channels.get(channel_id)
 
     async def close_channel(self,channel_id):
@@ -540,7 +636,8 @@ class GhostWireClient:
         while self.running:
             try:
                 await asyncio.sleep(self.ping_interval)
-                if self.main_websocket:
+                http2_alive=self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected
+                if self.main_websocket or http2_alive:
                     timestamp=int(time.time()*1000)
                     if self.main_control_queue:
                         try:
@@ -560,13 +657,15 @@ class GhostWireClient:
                 break
 
     async def ping_timeout_monitor(self):
-        while self.running and self.main_websocket:
+        while self.running and (self.main_websocket or (self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected)):
             await asyncio.sleep(15)
             now=time.time()
             last_activity=max(self.last_rx_time,self.last_pong_time)
             if now-last_activity>self.ping_timeout:
                 logger.warning("Server ping timeout, closing connection")
-                if self.main_websocket:
+                if self.config.protocol=="http2" and self.http2_transport:
+                    await self.http2_transport.close()
+                elif self.main_websocket:
                     await self.main_websocket.close()
                 break
 
@@ -585,12 +684,16 @@ class GhostWireClient:
                 self.main_send_queue=send_queue
                 self.main_control_queue=control_queue
                 try:
-                    sender_task=asyncio.create_task(self.sender_task(self.main_websocket,send_queue,control_queue,stop_event))
+                    if self.config.protocol=="http2":
+                        sender_task=asyncio.create_task(self.http2_sender_task(self.http2_transport,send_queue,control_queue,stop_event))
+                        receive_task=asyncio.create_task(self.http2_receive_messages(self.http2_transport,"main"))
+                    else:
+                        sender_task=asyncio.create_task(self.sender_task(self.main_websocket,send_queue,control_queue,stop_event))
+                        receive_task=asyncio.create_task(self.receive_messages(self.main_websocket,"main"))
                     self.channel_sender_tasks["main"]=sender_task
                     self.channel_stop_events["main"]=stop_event
                     ping_task=asyncio.create_task(self.ping_loop())
                     timeout_monitor=asyncio.create_task(self.ping_timeout_monitor())
-                    receive_task=asyncio.create_task(self.receive_messages(self.main_websocket,"main"))
                     self.channel_recv_tasks["main"]=receive_task
                     shutdown_task=asyncio.create_task(self.shutdown_event.wait())
                     wait_tasks={receive_task,shutdown_task}
@@ -618,13 +721,21 @@ class GhostWireClient:
                     await self.close_child_workers()
                     await self.close_all_child_channels()
                     self.clear_conn_writers()
-                    if self.main_websocket:
-                        try:
-                            await asyncio.wait_for(self.main_websocket.close(),timeout=2)
-                        except:
-                            pass
-                    self.main_websocket=None
-                    self.websocket=None
+                    if self.config.protocol=="http2":
+                        if self.http2_transport:
+                            try:
+                                await asyncio.wait_for(self.http2_transport.close(),timeout=2)
+                            except:
+                                pass
+                        self.http2_transport=None
+                    else:
+                        if self.main_websocket:
+                            try:
+                                await asyncio.wait_for(self.main_websocket.close(),timeout=2)
+                            except:
+                                pass
+                        self.main_websocket=None
+                        self.websocket=None
                     self.connected_server_url=""
                     self.send_queue=None
                     self.control_queue=None
