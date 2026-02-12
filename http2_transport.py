@@ -253,11 +253,12 @@ class HTTP2ClientTransport:
             host=parsed.hostname
             port=parsed.port or (443 if parsed.scheme=="https" else 80)
             use_ssl=parsed.scheme=="https"
+            logger.info(f"Connecting to {host}:{port} (ssl={use_ssl})...")
             if use_ssl:
                 ssl_context=ssl.create_default_context()
-                self.reader,self.writer=await asyncio.open_connection(host,port,ssl=ssl_context,server_hostname=host)
+                self.reader,self.writer=await asyncio.wait_for(asyncio.open_connection(host,port,ssl=ssl_context,server_hostname=host),timeout=30)
             else:
-                self.reader,self.writer=await asyncio.open_connection(host,port)
+                self.reader,self.writer=await asyncio.wait_for(asyncio.open_connection(host,port),timeout=30)
             config=H2Configuration(client_side=True)
             self.conn=H2Connection(config=config)
             async with self.conn_lock:
@@ -273,13 +274,15 @@ class HTTP2ClientTransport:
             self.writer.write(outbound)
             await self.writer.drain()
             self.receiver_task=asyncio.create_task(self._receiver_loop())
-            server_msg_len_data=await self._read_exact(4)
+            logger.debug("Waiting for server public key...")
+            server_msg_len_data=await asyncio.wait_for(self._read_exact(4),timeout=30)
             server_msg_len=struct.unpack("!I",server_msg_len_data)[0]
-            server_msg_data=await self._read_exact(server_msg_len)
+            server_msg_data=await asyncio.wait_for(self._read_exact(server_msg_len),timeout=30)
             msg_type,_,server_pubkey,_=unpack_message(server_msg_data,None)
             if msg_type!=MSG_PUBKEY:
                 raise ValueError("Expected public key from server")
             server_public_key=deserialize_public_key(server_pubkey)
+            logger.debug("Performing authentication...")
             client_private_key,client_public_key=generate_rsa_keypair()
             auth_msg=pack_auth_message(self.token,server_public_key,role="main")
             frame_data=struct.pack("!I",len(auth_msg))+auth_msg
@@ -287,9 +290,10 @@ class HTTP2ClientTransport:
             pubkey_msg=pack_pubkey(client_public_key)
             frame_data=struct.pack("!I",len(pubkey_msg))+pubkey_msg
             await self._send_framed_bytes(frame_data)
-            session_msg_len_data=await self._read_exact(4)
+            logger.debug("Waiting for session key...")
+            session_msg_len_data=await asyncio.wait_for(self._read_exact(4),timeout=30)
             session_msg_len=struct.unpack("!I",session_msg_len_data)[0]
-            session_msg_data=await self._read_exact(session_msg_len)
+            session_msg_data=await asyncio.wait_for(self._read_exact(session_msg_len),timeout=30)
             session_type,_,session_payload,_=unpack_message(session_msg_data,None)
             if session_type!=MSG_SESSION_KEY:
                 raise ValueError("Expected session key from server")
