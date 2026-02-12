@@ -6,7 +6,7 @@ import struct
 from http import HTTPStatus
 import httpx
 from protocol import *
-from crypto import generate_rsa_keypair,serialize_public_key,deserialize_public_key,encrypt_token,decrypt_token,derive_key
+from auth import generate_rsa_keypair,serialize_public_key,deserialize_public_key,encrypt_token,decrypt_token,derive_key
 
 logger=logging.getLogger(__name__)
 
