@@ -43,13 +43,13 @@ if [ ! -f /etc/ghostwire/client.toml ]; then
     echo "Client Configuration"
     echo "===================="
     while true; do
-        read -p "Server URL (e.g., wss://tunnel.example.com/ws): " SERVER_URL
+        read -p "Server URL (e.g., wss://tunnel.example.com/ws or https://tunnel.example.com/ws): " SERVER_URL
         if [ -z "$SERVER_URL" ]; then
             echo "❌ This field is required"
             continue
         fi
-        if [[ ! "$SERVER_URL" =~ ^wss?:// ]]; then
-            echo "❌ URL must start with ws:// or wss://"
+        if [[ ! "$SERVER_URL" =~ ^(wss?|https?):// ]]; then
+            echo "❌ URL must start with ws://, wss://, http://, or https://"
             continue
         fi
         break
