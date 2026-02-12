@@ -530,13 +530,17 @@ class GhostWireServer:
             return connection.respond(HTTPStatus.NOT_FOUND,"")
     async def start(self):
         self.running=True
-        logger.info(f"Starting GhostWire server on {self.config.listen_host}:{self.config.listen_port}")
+        logger.info(f"Starting GhostWire server ({self.config.protocol}) on {self.config.listen_host}:{self.config.listen_port}")
         start_panel(self.config,self)
         update_task=None
         if self.config.auto_update:
             update_task=asyncio.create_task(self.updater.update_loop(self.shutdown_event))
-        async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,max_queue=512,ping_interval=None,compression=None,write_limit=65536,close_timeout=10,process_request=self.process_request):
-            await self.shutdown_event.wait()
+        if self.config.protocol=="http2":
+            from http2_transport import start_http2_server
+            await start_http2_server(self)
+        else:
+            async with websockets.serve(self.handle_client,self.config.listen_host,self.config.listen_port,max_size=None,max_queue=512,ping_interval=None,compression=None,write_limit=65536,close_timeout=10,process_request=self.process_request):
+                await self.shutdown_event.wait()
         if update_task:
             update_task.cancel()
         logger.info("Server shutting down")

@@ -126,11 +126,13 @@ threads=4"
 
     cat > /etc/ghostwire/server.toml <<EOF
 [server]
+protocol="http2"
 listen_host="${WS_HOST}"
 listen_port=${WS_PORT}
 listen_backlog=4096
 websocket_path="/ws"
-ping_timeout=10
+ping_interval=30
+ping_timeout=60
 ws_pool_enabled=false
 ws_pool_children=2
 auto_update=${AUTO_UPDATE}
