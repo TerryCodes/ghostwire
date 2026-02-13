@@ -65,7 +65,7 @@ class GhostWireClient:
         self.conn_data_rx_pending={}
         self.conn_data_rx_wait_start={}
         self.conn_data_close_seq={}
-        self.seq_timeout=10
+        self.seq_timeout=30
         self.io_chunk_size=262144
         self.writer_batch_bytes=1048576
         self.ws_send_batch_bytes=4194304
