@@ -18,6 +18,8 @@ MSG_ERROR=0x07
 MSG_INFO=0x08
 MSG_CHILD_CFG=0x09
 MSG_SESSION_KEY=0x0A
+MSG_DATA_SEQ=0x0B
+MSG_CLOSE_SEQ=0x0C
 
 @lru_cache(maxsize=64)
 def get_aesgcm(key):
@@ -122,8 +124,20 @@ def unpack_connect(payload):
 def pack_data(conn_id,data,key):
     return pack_message(MSG_DATA,conn_id,data,key)
 
+def pack_data_seq(conn_id,seq,data,key):
+    return pack_message(MSG_DATA_SEQ,conn_id,struct.pack("!I",seq)+data,key)
+
+def unpack_data_seq(payload):
+    return struct.unpack("!I",payload[:4])[0],payload[4:]
+
 def pack_close(conn_id,reason,key):
     return pack_message(MSG_CLOSE,conn_id,bytes([reason]),key)
+
+def pack_close_seq(conn_id,seq,reason,key):
+    return pack_message(MSG_CLOSE_SEQ,conn_id,struct.pack("!IB",seq,reason),key)
+
+def unpack_close_seq(payload):
+    return struct.unpack("!IB",payload)
 
 def pack_ping(timestamp,key):
     return pack_message(MSG_PING,0,struct.pack("!Q",timestamp),key)

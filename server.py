@@ -50,7 +50,13 @@ class GhostWireServer:
         self.child_channels={}
         self.conn_channel_map={}
         self.child_rr_index=0
+        self.data_rr_index=0
         self.child_queue_sizes={}
+        self.conn_data_tx_seq={}
+        self.conn_data_seq_enabled=set()
+        self.conn_data_rx_expected={}
+        self.conn_data_rx_pending={}
+        self.conn_data_close_seq={}
         self.io_chunk_size=262144
         self.writer_batch_bytes=1048576
         self.ws_send_batch_bytes=4194304
@@ -66,6 +72,11 @@ class GhostWireServer:
                 task.cancel()
         self.conn_write_tasks.clear()
         self.conn_write_queues.clear()
+        self.conn_data_tx_seq.clear()
+        self.conn_data_seq_enabled.clear()
+        self.conn_data_rx_expected.clear()
+        self.conn_data_rx_pending.clear()
+        self.conn_data_close_seq.clear()
 
     async def close_conn_writer(self,conn_id,flush=False):
         queue=self.conn_write_queues.get(conn_id)
@@ -122,6 +133,7 @@ class GhostWireServer:
         finally:
             self.conn_write_queues.pop(conn_id,None)
             self.conn_write_tasks.pop(conn_id,None)
+            self.clear_conn_data_state(conn_id)
             self.tunnel_manager.remove_connection(conn_id)
 
     async def sender_task(self,websocket,send_queue,control_queue,stop_event):
@@ -196,6 +208,75 @@ class GhostWireServer:
         self.child_rr_index+=1
         return child_id
 
+    def clear_conn_data_state(self,conn_id):
+        self.conn_data_tx_seq.pop(conn_id,None)
+        self.conn_data_seq_enabled.discard(conn_id)
+        self.conn_data_rx_expected.pop(conn_id,None)
+        self.conn_data_rx_pending.pop(conn_id,None)
+        self.conn_data_close_seq.pop(conn_id,None)
+
+    def should_stripe_data(self):
+        return self.config.ws_pool_enabled and len(self.get_available_child_ids())>1
+
+    def next_data_seq(self,conn_id):
+        seq=self.conn_data_tx_seq.get(conn_id,0)
+        self.conn_data_tx_seq[conn_id]=seq+1
+        return seq
+
+    def pick_data_channel(self,conn_id):
+        if self.should_stripe_data():
+            child_ids=self.get_available_child_ids()
+            if child_ids:
+                child_id=child_ids[self.data_rr_index%len(child_ids)]
+                self.data_rr_index+=1
+                return child_id
+        mapped_child=self.conn_channel_map.get(conn_id)
+        if mapped_child:
+            return mapped_child
+        return "main"
+
+    def get_send_queue_for_channel(self,channel_id):
+        if channel_id=="main":
+            return self.send_queue
+        channel=self.child_channels.get(channel_id)
+        if channel:
+            return channel.get("send_queue")
+        return None
+
+    async def maybe_finalize_close_seq(self,conn_id):
+        close_state=self.conn_data_close_seq.get(conn_id)
+        if not close_state:
+            return
+        close_seq,_=close_state
+        expected=self.conn_data_rx_expected.get(conn_id,0)
+        pending=self.conn_data_rx_pending.get(conn_id,{})
+        if expected>=close_seq and not pending:
+            self.conn_data_close_seq.pop(conn_id,None)
+            await self.handle_close(conn_id)
+            self.conn_channel_map.pop(conn_id,None)
+            self.clear_conn_data_state(conn_id)
+
+    async def handle_data_seq(self,conn_id,seq,payload):
+        expected=self.conn_data_rx_expected.get(conn_id,0)
+        if seq<expected:
+            return
+        if seq==expected:
+            await self.handle_data(conn_id,payload)
+            expected+=1
+            pending=self.conn_data_rx_pending.get(conn_id)
+            while pending and expected in pending:
+                next_payload=pending.pop(expected)
+                await self.handle_data(conn_id,next_payload)
+                expected+=1
+            if pending is not None and not pending:
+                self.conn_data_rx_pending.pop(conn_id,None)
+            self.conn_data_rx_expected[conn_id]=expected
+            await self.maybe_finalize_close_seq(conn_id)
+            return
+        pending=self.conn_data_rx_pending.setdefault(conn_id,{})
+        if seq not in pending:
+            pending[seq]=payload
+
     async def close_child_channels(self):
         for child_id,channel in list(self.child_channels.items()):
             stop_event=channel.get("stop_event")
@@ -223,6 +304,7 @@ class GhostWireServer:
             logger.warning(f"Child {child_id} lost, closing {len(affected)} connections (no alternatives)")
             for conn_id in affected:
                 self.conn_channel_map.pop(conn_id,None)
+                self.clear_conn_data_state(conn_id)
                 await self.close_conn_writer(conn_id,flush=False)
                 self.tunnel_manager.remove_connection(conn_id)
         else:
@@ -237,13 +319,22 @@ class GhostWireServer:
     async def route_message(self,msg_type,conn_id,payload):
         if msg_type==MSG_DATA:
             await self.handle_data(conn_id,payload)
+        elif msg_type==MSG_DATA_SEQ:
+            seq,data_payload=unpack_data_seq(payload)
+            await self.handle_data_seq(conn_id,seq,data_payload)
         elif msg_type==MSG_CLOSE:
             await self.handle_close(conn_id)
             self.conn_channel_map.pop(conn_id,None)
+            self.clear_conn_data_state(conn_id)
+        elif msg_type==MSG_CLOSE_SEQ:
+            close_seq,reason=unpack_close_seq(payload)
+            self.conn_data_close_seq[conn_id]=(close_seq,reason)
+            await self.maybe_finalize_close_seq(conn_id)
         elif msg_type==MSG_ERROR:
             logger.error(f"Client error for {conn_id}: {payload.decode()}")
             self.tunnel_manager.remove_connection(conn_id)
             self.conn_channel_map.pop(conn_id,None)
+            self.clear_conn_data_state(conn_id)
         elif msg_type==MSG_INFO:
             self.client_version=payload.decode()
             logger.info(f"Client version: {self.client_version}")
@@ -348,7 +439,7 @@ class GhostWireServer:
                         del buffer[:consumed]
                     except ValueError:
                         break
-                    if msg_type in (MSG_DATA,MSG_CLOSE,MSG_ERROR,MSG_INFO):
+                    if msg_type in (MSG_DATA,MSG_DATA_SEQ,MSG_CLOSE,MSG_CLOSE_SEQ,MSG_ERROR,MSG_INFO):
                         await self.route_message(msg_type,conn_id,payload)
                     elif msg_type==MSG_PING:
                         timestamp=struct.unpack("!Q",payload)[0]
@@ -426,6 +517,7 @@ class GhostWireServer:
             if not self.websocket or not send_queue or not control_queue:
                 logger.error(f"No client connected, dropping connection {conn_id}")
                 self.conn_channel_map.pop(conn_id,None)
+                self.clear_conn_data_state(conn_id)
                 self.tunnel_manager.remove_connection(conn_id)
                 writer.close()
                 await writer.wait_closed()
@@ -436,6 +528,7 @@ class GhostWireServer:
             except (asyncio.QueueFull,AttributeError):
                 logger.error(f"Control queue unavailable, dropping connection {conn_id}")
                 self.conn_channel_map.pop(conn_id,None)
+                self.clear_conn_data_state(conn_id)
                 self.tunnel_manager.remove_connection(conn_id)
                 writer.close()
                 await writer.wait_closed()
@@ -443,6 +536,7 @@ class GhostWireServer:
             asyncio.create_task(self.forward_local_to_websocket(conn_id,reader))
         except Exception as e:
             logger.error(f"Error sending CONNECT: {e}")
+            self.clear_conn_data_state(conn_id)
             self.tunnel_manager.remove_connection(conn_id)
             writer.close()
             await writer.wait_closed()
@@ -453,18 +547,17 @@ class GhostWireServer:
                 data=await reader.read(self.io_chunk_size)
                 if not data:
                     break
-                send_queue=self.send_queue
-                mapped_child=None
-                if self.config.ws_pool_enabled:
-                    mapped_child=self.conn_channel_map.get(conn_id)
-                    if mapped_child:
-                        channel=self.child_channels.get(mapped_child)
-                        if channel:
-                            send_queue=channel.get("send_queue")
+                channel_id=self.pick_data_channel(conn_id)
+                send_queue=self.get_send_queue_for_channel(channel_id)
                 if not self.websocket or not send_queue:
                     logger.debug(f"Client disconnected, stopping forward for {conn_id}")
                     break
-                message=pack_data(conn_id,data,self.key)
+                use_seq=conn_id in self.conn_data_seq_enabled or self.should_stripe_data()
+                if use_seq:
+                    self.conn_data_seq_enabled.add(conn_id)
+                    message=pack_data_seq(conn_id,self.next_data_seq(conn_id),data,self.key)
+                else:
+                    message=pack_data(conn_id,data,self.key)
                 try:
                     send_queue.put_nowait(message)
                 except asyncio.QueueFull:
@@ -488,12 +581,16 @@ class GhostWireServer:
                             control_queue=channel.get("control_queue")
                             send_queue=channel.get("send_queue")
                 if self.websocket and send_queue:
-                    send_queue.put_nowait(pack_close(conn_id,0,self.key))
+                    if conn_id in self.conn_data_seq_enabled:
+                        send_queue.put_nowait(pack_close_seq(conn_id,self.conn_data_tx_seq.get(conn_id,0),0,self.key))
+                    else:
+                        send_queue.put_nowait(pack_close(conn_id,0,self.key))
                 elif self.websocket and control_queue:
                     control_queue.put_nowait(pack_close(conn_id,0,self.key))
             except:
                 pass
             self.conn_channel_map.pop(conn_id,None)
+            self.clear_conn_data_state(conn_id)
             self.tunnel_manager.remove_connection(conn_id)
 
     async def handle_data(self,conn_id,payload):
@@ -509,9 +606,11 @@ class GhostWireServer:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
                 logger.warning(f"Write queue full for local connection {conn_id}")
+                self.clear_conn_data_state(conn_id)
                 await self.close_conn_writer(conn_id,flush=False)
             except Exception as e:
                 logger.error(f"Error writing to local connection {conn_id}: {e}")
+                self.clear_conn_data_state(conn_id)
                 self.tunnel_manager.remove_connection(conn_id)
 
     async def handle_close(self,conn_id):
@@ -526,8 +625,10 @@ class GhostWireServer:
                     task.cancel()
                 self.conn_write_queues.pop(conn_id,None)
                 self.conn_write_tasks.pop(conn_id,None)
+                self.clear_conn_data_state(conn_id)
                 self.tunnel_manager.remove_connection(conn_id)
         else:
+            self.clear_conn_data_state(conn_id)
             self.tunnel_manager.remove_connection(conn_id)
 
     async def process_request(self,connection,request):
