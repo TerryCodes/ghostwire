@@ -20,6 +20,7 @@ MSG_CHILD_CFG=0x09
 MSG_SESSION_KEY=0x0A
 MSG_DATA_SEQ=0x0B
 MSG_CLOSE_SEQ=0x0C
+MSG_CONNECT_UDP=0x0D
 
 @lru_cache(maxsize=64)
 def get_aesgcm(key):
@@ -115,6 +116,10 @@ def unpack_message(data,key):
 def pack_connect(conn_id,remote_ip,remote_port,key):
     payload=remote_ip.encode()+struct.pack("!H",remote_port)
     return pack_message(MSG_CONNECT,conn_id,payload,key)
+
+def pack_connect_udp(conn_id,remote_ip,remote_port,key):
+    payload=remote_ip.encode()+struct.pack("!H",remote_port)
+    return pack_message(MSG_CONNECT_UDP,conn_id,payload,key)
 
 def unpack_connect(payload):
     remote_ip=payload[:-2].decode()

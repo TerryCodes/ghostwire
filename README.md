@@ -128,6 +128,7 @@ ws_pool_enabled=true       # Enable child channel pooling (default: true)
 ws_pool_children=8         # Max child channels (default: 8)
 ws_pool_min=2              # Min always-connected channels (default: 2)
 ws_pool_stripe=false       # Stripe packets across channels (unstable, default: false)
+udp_enabled=true           # Also listen for UDP on tunnel ports (default: true)
 auto_update=true
 update_check_interval=300
 update_check_on_startup=true
@@ -171,6 +172,7 @@ For web browsing with hundreds of concurrent connections (typical modern website
 - **`ws_pool_min`** (server only, default: 2): Minimum always-connected channels; pool scales between min and max based on load
 - **`ws_pool_stripe`** (server only, default: false): Stripe individual packets across channels for higher throughput — disabled by default as it requires sequence reordering and is unstable under packet loss
 
+- **`udp_enabled`** (server only, default: true): Also listen on the configured tunnel ports via UDP; set to `false` to disable UDP tunneling
 - **`ws_send_batch_bytes`** (both, default: 65536): Max bytes batched into a single WebSocket frame
   - Lower values reduce latency under high load (speedtest, video) by preventing large frames from blocking smaller packets
   - **65536 (64KB)**: Default, best balance for most use cases

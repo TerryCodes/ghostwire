@@ -81,6 +81,7 @@ class ServerConfig:
         self.ws_pool_scale_down=config["server"].get("ws_pool_scale_down",16)
         self.ws_pool_stripe=config["server"].get("ws_pool_stripe",False)
         self.ws_send_batch_bytes=config["server"].get("ws_send_batch_bytes",65536)
+        self.udp_enabled=config["server"].get("udp_enabled",True)
         self.auto_update=config["server"].get("auto_update",True)
         self.update_check_interval=config["server"].get("update_check_interval",300)
         self.update_check_on_startup=config["server"].get("update_check_on_startup",True)

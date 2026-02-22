@@ -13,6 +13,7 @@ from auth import validate_token
 from tunnel import TunnelManager
 from updater import Updater
 from panel import start_panel
+from udp_transport import UDPWriterAdapter
 
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s")
 logger=logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class GhostWireServer:
         self.conn_data_rx_wait_start={}
         self.conn_data_close_seq={}
         self.seq_timeout=30
+        self.udp_sessions={}
         self.io_chunk_size=262144
         self.writer_batch_bytes=1048576
         self.ws_send_batch_bytes=config.ws_send_batch_bytes
@@ -386,6 +388,7 @@ class GhostWireServer:
         ping_monitor=None
         seq_monitor=None
         pool_monitor=None
+        udp_cleanup=None
         send_queue=asyncio.Queue(maxsize=512)
         control_queue=asyncio.Queue(maxsize=256)
         stop_event=asyncio.Event()
@@ -468,6 +471,7 @@ class GhostWireServer:
                         except asyncio.QueueFull:
                             logger.warning("Main control queue full, child config dropped")
                         pool_monitor=asyncio.create_task(self.pool_manager_loop())
+                    udp_cleanup=asyncio.create_task(self.udp_session_cleanup_loop())
                 else:
                     self.child_channels[child_id]={"ws":websocket,"send_queue":send_queue,"control_queue":control_queue,"stop_event":stop_event,"sender":sender}
                 if not self.listeners:
@@ -511,8 +515,11 @@ class GhostWireServer:
                 seq_monitor.cancel()
             if pool_monitor:
                 pool_monitor.cancel()
+            if udp_cleanup:
+                udp_cleanup.cancel()
             if authenticated:
                 if role=="main":
+                    self.udp_sessions.clear()
                     await self.close_child_channels()
                     self.clear_conn_writers()
                     self.websocket=None
@@ -564,11 +571,140 @@ class GhostWireServer:
                     await self.main_websocket.close()
                 break
 
+    async def handle_udp_datagram(self,data,src_addr,remote_ip,remote_port,local_transport):
+        if not self.config.udp_enabled:
+            return
+        key=(src_addr,remote_ip,remote_port)
+        if key in self.udp_sessions:
+            conn_id,_,channel_id=self.udp_sessions[key]
+            self.udp_sessions[key]=(conn_id,time.time(),channel_id)
+        else:
+            if not self.websocket or not self.send_queue:
+                return
+            conn_id=self.tunnel_manager.generate_conn_id()
+            writer=UDPWriterAdapter(local_transport,src_addr)
+            self.tunnel_manager.add_connection(conn_id,(None,writer))
+            send_queue=self.send_queue
+            control_queue=self.control_queue
+            channel_id="main"
+            if self.config.ws_pool_enabled:
+                selected_child=self.pick_child_for_connection()
+                if selected_child:
+                    channel=self.child_channels.get(selected_child)
+                    if channel:
+                        send_queue=channel.get("send_queue")
+                        control_queue=channel.get("control_queue")
+                        self.conn_channel_map[conn_id]=selected_child
+                        channel_id=selected_child
+            self.udp_sessions[key]=(conn_id,time.time(),channel_id)
+            connect_msg=pack_connect_udp(conn_id,remote_ip,remote_port,self.key)
+            try:
+                control_queue.put_nowait(connect_msg)
+            except (asyncio.QueueFull,AttributeError):
+                self.tunnel_manager.remove_connection(conn_id)
+                del self.udp_sessions[key]
+                return
+        conn_id,_,channel_id=self.udp_sessions[key]
+        send_queue=self.get_send_queue_for_channel(channel_id)
+        if not send_queue:
+            return
+        message=pack_data(conn_id,data,self.key)
+        try:
+            send_queue.put_nowait(message)
+        except asyncio.QueueFull:
+            pass
+
+    async def udp_session_cleanup_loop(self):
+        while self.running and not self.shutdown_event.is_set():
+            await asyncio.sleep(10)
+            now=time.time()
+            expired=[k for k,(cid,t,_) in list(self.udp_sessions.items()) if now-t>30]
+            for key in expired:
+                conn_id,_,channel_id=self.udp_sessions.pop(key)
+                send_queue=self.get_send_queue_for_channel(channel_id)
+                if send_queue and self.key:
+                    try:
+                        send_queue.put_nowait(pack_close(conn_id,0,self.key))
+                    except asyncio.QueueFull:
+                        pass
+                self.conn_channel_map.pop(conn_id,None)
+                self.tunnel_manager.remove_connection(conn_id)
+
+    async def handle_udp_client(self,session):
+        if self.main_websocket is not None:
+            logger.warning(f"Rejecting UDP client from {session.remote_address}: main already connected")
+            return
+        sender=None
+        ping_monitor=None
+        seq_monitor=None
+        udp_cleanup=None
+        send_queue=asyncio.Queue(maxsize=512)
+        control_queue=asyncio.Queue(maxsize=256)
+        stop_event=asyncio.Event()
+        self.last_ping_time=time.time()
+        try:
+            sender=asyncio.create_task(self.sender_task(session,send_queue,control_queue,stop_event))
+            self.websocket=session
+            self.main_websocket=session
+            self.send_queue=send_queue
+            self.control_queue=control_queue
+            self.main_send_queue=send_queue
+            self.main_control_queue=control_queue
+            ping_monitor=asyncio.create_task(self.ping_monitor_loop())
+            seq_monitor=asyncio.create_task(self.sequence_timeout_monitor())
+            udp_cleanup=asyncio.create_task(self.udp_session_cleanup_loop())
+            if not self.listeners:
+                await self.start_listeners()
+            logger.info(f"UDP raw client connected from {session.remote_address}")
+            async for message in session:
+                self.last_ping_time=time.time()
+                msg_type,conn_id,payload,_=unpack_message(message,self.key)
+                if msg_type in (MSG_DATA,MSG_DATA_SEQ,MSG_CLOSE,MSG_CLOSE_SEQ,MSG_ERROR,MSG_INFO):
+                    await self.route_message(msg_type,conn_id,payload)
+                elif msg_type==MSG_PING:
+                    timestamp=struct.unpack("!Q",payload)[0]
+                    try:
+                        control_queue.put_nowait(pack_pong(timestamp,self.key))
+                    except asyncio.QueueFull:
+                        pass
+        except ConnectionError:
+            logger.info(f"UDP raw client disconnected from {session.remote_address}")
+        except Exception as e:
+            logger.error(f"UDP raw client error: {e}",exc_info=True)
+        finally:
+            if sender:
+                stop_event.set()
+                try:
+                    await asyncio.wait_for(sender,timeout=2)
+                except:
+                    sender.cancel()
+            if ping_monitor:
+                ping_monitor.cancel()
+            if seq_monitor:
+                seq_monitor.cancel()
+            if udp_cleanup:
+                udp_cleanup.cancel()
+            self.udp_sessions.clear()
+            await self.close_child_channels()
+            self.clear_conn_writers()
+            self.websocket=None
+            self.main_websocket=None
+            self.send_queue=None
+            self.control_queue=None
+            self.main_send_queue=None
+            self.main_control_queue=None
+            self.client_version=None
+            self.tunnel_manager.close_all()
+
     async def start_listeners(self):
         for local_ip,local_port,remote_ip,remote_port in self.config.port_mappings:
             server=await asyncio.start_server(lambda r,w,rip=remote_ip,rport=remote_port:self.handle_local_connection(r,w,rip,rport),local_ip,local_port,backlog=self.config.listen_backlog)
             self.listeners.append(server)
             logger.info(f"Listening on {local_ip}:{local_port} -> {remote_ip}:{remote_port}")
+        if self.config.udp_enabled:
+            from udp_transport import start_udp_local_listeners
+            udp_transports=await start_udp_local_listeners(self)
+            self.listeners.extend(udp_transports)
 
     async def handle_local_connection(self,reader,writer,remote_ip,remote_port):
         conn_id=self.tunnel_manager.generate_conn_id()

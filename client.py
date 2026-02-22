@@ -8,12 +8,14 @@ import struct
 import argparse
 import random
 import aiohttp
+from urllib.parse import urlparse
 from nanoid import generate
 from protocol import *
 from config import ClientConfig
 from tunnel import TunnelManager
 from updater import Updater
 from aiohttp_ws_transport import AiohttpClientWebSocket
+from udp_transport import UDPClientTransport,UDPWriterAdapter,_UDPDataProtocol as UDPDataProtocol
 
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s")
 logger=logging.getLogger(__name__)
@@ -34,6 +36,7 @@ class GhostWireClient:
         self.main_websocket=None
         self.http2_transport=None
         self.grpc_transport=None
+        self.udp_transport=None
         self.key=None
         self.running=False
         self.reconnect_delay=config.initial_delay
@@ -112,6 +115,70 @@ class GhostWireClient:
         task=asyncio.create_task(self.handle_connect(conn_id,remote_ip,remote_port))
         self.connect_tasks.add(task)
         task.add_done_callback(self.connect_tasks.discard)
+
+    def spawn_connect_udp_task(self,conn_id,remote_ip,remote_port):
+        task=asyncio.create_task(self.handle_connect_udp(conn_id,remote_ip,remote_port))
+        self.connect_tasks.add(task)
+        task.add_done_callback(self.connect_tasks.discard)
+
+    async def handle_connect_udp(self,conn_id,remote_ip,remote_port):
+        recv_queue=asyncio.Queue(maxsize=512)
+        try:
+            loop=asyncio.get_event_loop()
+            transport,_=await loop.create_datagram_endpoint(
+                lambda: UDPDataProtocol(recv_queue),
+                remote_addr=(remote_ip,remote_port)
+            )
+            writer=UDPWriterAdapter(transport)
+            self.tunnel_manager.add_connection(conn_id,(None,writer))
+            buffered=self.preconnect_buffers.pop(conn_id,[])
+            for payload in buffered:
+                transport.sendto(payload)
+            asyncio.create_task(self.forward_udp_response(conn_id,recv_queue))
+        except Exception as e:
+            logger.error(f"Failed to open UDP to {remote_ip}:{remote_port}: {e}")
+            self.preconnect_buffers.pop(conn_id,None)
+            self.clear_conn_data_state(conn_id)
+            error_msg=pack_error(conn_id,str(e),self.key)
+            try:
+                if self.control_queue:
+                    self.control_queue.put_nowait(error_msg)
+            except (asyncio.QueueFull,AttributeError):
+                pass
+
+    async def forward_udp_response(self,conn_id,recv_queue):
+        try:
+            while True:
+                try:
+                    data=await asyncio.wait_for(recv_queue.get(),timeout=30)
+                except asyncio.TimeoutError:
+                    break
+                if data is None:
+                    break
+                channel_id=self.pick_data_channel(conn_id)
+                channel=self.get_channel(channel_id)
+                send_queue=channel.get("send_queue") if channel else None
+                if not send_queue:
+                    break
+                message=pack_data(conn_id,data,self.key)
+                try:
+                    send_queue.put_nowait(message)
+                except asyncio.QueueFull:
+                    pass
+        except Exception as e:
+            logger.debug(f"UDP response forward error for {conn_id}: {e}")
+        finally:
+            try:
+                channel_id=self.conn_channel_map.get(conn_id,"main")
+                channel=self.get_channel(channel_id)
+                control_queue=channel.get("control_queue") if channel else None
+                if control_queue:
+                    control_queue.put_nowait(pack_close(conn_id,0,self.key))
+            except:
+                pass
+            self.conn_channel_map.pop(conn_id,None)
+            self.clear_conn_data_state(conn_id)
+            self.tunnel_manager.remove_connection(conn_id)
 
     async def close_conn_writer(self,conn_id,flush=False):
         queue=self.conn_write_queues.get(conn_id)
@@ -389,6 +456,10 @@ class GhostWireClient:
                         self.conn_channel_map[conn_id]=channel_id
                         logger.debug(f"Routing connection {conn_id} via {channel_id}")
                         self.spawn_connect_task(conn_id,remote_ip,remote_port)
+                    elif msg_type==MSG_CONNECT_UDP:
+                        remote_ip,remote_port=unpack_connect(payload)
+                        self.conn_channel_map[conn_id]=channel_id
+                        self.spawn_connect_udp_task(conn_id,remote_ip,remote_port)
                     elif msg_type==MSG_DATA:
                         await self.handle_data(conn_id,payload)
                     elif msg_type==MSG_DATA_SEQ:
@@ -437,6 +508,10 @@ class GhostWireClient:
                     self.conn_channel_map[conn_id]=channel_id
                     logger.debug(f"Routing connection {conn_id} via {channel_id}")
                     self.spawn_connect_task(conn_id,remote_ip,remote_port)
+                elif msg_type==MSG_CONNECT_UDP:
+                    remote_ip,remote_port=unpack_connect(payload)
+                    self.conn_channel_map[conn_id]=channel_id
+                    self.spawn_connect_udp_task(conn_id,remote_ip,remote_port)
                 elif msg_type==MSG_DATA:
                     await self.handle_data(conn_id,payload)
                 elif msg_type==MSG_DATA_SEQ:
@@ -514,7 +589,7 @@ class GhostWireClient:
     async def child_worker(self,slot_id):
         delay=self.config.initial_delay
         while self.running and not self.shutdown_event.is_set():
-            if not self.main_websocket:
+            if not self.main_websocket and not (self.config.protocol=="udp" and self.udp_transport and self.udp_transport.connected):
                 break
             server_url=self.connected_server_url if self.connected_server_url else self.config.server_url
             child_id=await self.connect_child_channel(server_url,slot_id)
@@ -593,6 +668,21 @@ class GhostWireClient:
                 self.last_rx_time=time.time()
                 info_msg=pack_info(self.updater.current_version,self.key)
                 await self.grpc_transport.send(info_msg)
+                self.reconnect_delay=self.config.initial_delay
+                return True
+            elif self.config.protocol=="udp":
+                parsed=urlparse(self.config.server_url)
+                host=parsed.hostname
+                port=parsed.port or 443
+                self.udp_transport=UDPClientTransport(host,port,self.config.token)
+                if not await self.udp_transport.connect():
+                    self.udp_transport=None
+                    return False
+                self.key=self.udp_transport.key
+                self.last_ping_time=time.time()
+                self.last_pong_time=time.time()
+                self.last_rx_time=time.time()
+                logger.info("Connected via UDP to server")
                 self.reconnect_delay=self.config.initial_delay
                 return True
             elif self.config.protocol=="aiohttp-ws":
@@ -795,6 +885,11 @@ class GhostWireClient:
                         self.conn_channel_map[conn_id]=channel_id
                         logger.debug(f"Routing connection {conn_id} via {channel_id}")
                         self.spawn_connect_task(conn_id,remote_ip,remote_port)
+                    elif msg_type==MSG_CONNECT_UDP:
+                        remote_ip,remote_port=unpack_connect(payload)
+                        self.conn_channel_map[conn_id]=channel_id
+                        logger.debug(f"Routing UDP connection {conn_id} via {channel_id}")
+                        self.spawn_connect_udp_task(conn_id,remote_ip,remote_port)
                     elif msg_type==MSG_DATA:
                         await self.handle_data(conn_id,payload)
                     elif msg_type==MSG_DATA_SEQ:
@@ -886,7 +981,8 @@ class GhostWireClient:
                 await asyncio.sleep(self.ping_interval)
                 http2_alive=self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected
                 grpc_alive=self.config.protocol=="grpc" and self.grpc_transport and self.grpc_transport.connected
-                if self.main_websocket or http2_alive or grpc_alive:
+                udp_alive=self.config.protocol=="udp" and self.udp_transport and self.udp_transport.connected
+                if self.main_websocket or http2_alive or grpc_alive or udp_alive:
                     timestamp=int(time.time()*1000)
                     if self.main_control_queue:
                         try:
@@ -906,7 +1002,7 @@ class GhostWireClient:
                 break
 
     async def ping_timeout_monitor(self):
-        while self.running and (self.main_websocket or (self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected) or (self.config.protocol=="grpc" and self.grpc_transport and self.grpc_transport.connected)):
+        while self.running and (self.main_websocket or (self.config.protocol=="http2" and self.http2_transport and self.http2_transport.connected) or (self.config.protocol=="grpc" and self.grpc_transport and self.grpc_transport.connected) or (self.config.protocol=="udp" and self.udp_transport and self.udp_transport.connected)):
             await asyncio.sleep(15)
             now=time.time()
             last_activity=max(self.last_rx_time,self.last_pong_time)
@@ -916,6 +1012,8 @@ class GhostWireClient:
                     await self.http2_transport.close()
                 elif self.config.protocol=="grpc" and self.grpc_transport:
                     await self.grpc_transport.close()
+                elif self.config.protocol=="udp" and self.udp_transport:
+                    await self.udp_transport.close()
                 elif self.main_websocket:
                     await self.main_websocket.close()
                 break
@@ -941,6 +1039,9 @@ class GhostWireClient:
                     elif self.config.protocol=="grpc":
                         sender_task=asyncio.create_task(self.http2_sender_task(self.grpc_transport,send_queue,control_queue,stop_event))
                         receive_task=asyncio.create_task(self.grpc_receive_messages(self.grpc_transport,"main"))
+                    elif self.config.protocol=="udp":
+                        sender_task=asyncio.create_task(self.sender_task(self.udp_transport,send_queue,control_queue,stop_event))
+                        receive_task=asyncio.create_task(self.receive_messages(self.udp_transport,"main"))
                     else:
                         sender_task=asyncio.create_task(self.sender_task(self.main_websocket,send_queue,control_queue,stop_event))
                         receive_task=asyncio.create_task(self.receive_messages(self.main_websocket,"main"))
@@ -991,6 +1092,13 @@ class GhostWireClient:
                             except:
                                 pass
                         self.grpc_transport=None
+                    elif self.config.protocol=="udp":
+                        if self.udp_transport:
+                            try:
+                                await asyncio.wait_for(self.udp_transport.close(),timeout=2)
+                            except:
+                                pass
+                        self.udp_transport=None
                     else:
                         if self.main_websocket:
                             try:

@@ -20,6 +20,35 @@ def _split_send(data,send_fn):
         send_fn(buf[offset:end])
         offset=end
 
+class UDPWriterAdapter:
+    def __init__(self,transport,addr=None):
+        self._transport=transport
+        self._addr=addr
+    def write(self,data):
+        self._transport.sendto(data,self._addr) if self._addr else self._transport.sendto(data)
+    async def drain(self):
+        pass
+    def close(self):
+        pass
+    async def wait_closed(self):
+        pass
+
+class _UDPDataProtocol(asyncio.DatagramProtocol):
+    def __init__(self,recv_queue):
+        self._recv_queue=recv_queue
+    def datagram_received(self,data,addr):
+        try:
+            self._recv_queue.put_nowait(data)
+        except asyncio.QueueFull:
+            pass
+    def error_received(self,exc):
+        logger.warning(f"UDP data error: {exc}")
+    def connection_lost(self,exc):
+        try:
+            self._recv_queue.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
+
 class _UDPClientProtocol(asyncio.DatagramProtocol):
     def __init__(self,recv_queue):
         self._recv_queue=recv_queue
@@ -45,6 +74,10 @@ class UDPClientTransport:
         self.connected=False
         self._transport=None
         self._recv_queue=asyncio.Queue(maxsize=4096)
+
+    @property
+    def close_code(self):
+        return None if self.connected else 1000
 
     async def connect(self):
         loop=asyncio.get_event_loop()
@@ -98,6 +131,15 @@ class UDPClientTransport:
         if self._transport:
             self._transport.close()
             self._transport=None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return await self.recv()
+        except ConnectionError:
+            raise StopAsyncIteration
 
 class UDPSession:
     def __init__(self,addr,send_fn):
@@ -206,13 +248,40 @@ class _UDPServerProtocol(asyncio.DatagramProtocol):
             self._session=session
             self._pending_addr=None
             logger.info(f"UDP client authenticated from {addr}")
-            await ghost.handle_client(session)
+            await ghost.handle_udp_client(session)
         except Exception as e:
             logger.error(f"UDP handshake error from {addr}: {e}",exc_info=True)
         finally:
             if self._session and self._session._addr==addr:
                 self._session=None
             self._pending_addr=None
+
+class _UDPLocalListener(asyncio.DatagramProtocol):
+    def __init__(self,ghost_server,remote_ip,remote_port):
+        self._ghost=ghost_server
+        self._remote_ip=remote_ip
+        self._remote_port=remote_port
+        self._transport=None
+    def connection_made(self,transport):
+        self._transport=transport
+    def datagram_received(self,data,addr):
+        asyncio.create_task(self._ghost.handle_udp_datagram(data,addr,self._remote_ip,self._remote_port,self._transport))
+    def error_received(self,exc):
+        logger.warning(f"UDP local listener error: {exc}")
+    def connection_lost(self,exc):
+        pass
+
+async def start_udp_local_listeners(ghost_server):
+    loop=asyncio.get_event_loop()
+    transports=[]
+    for local_ip,local_port,remote_ip,remote_port in ghost_server.config.port_mappings:
+        transport,_=await loop.create_datagram_endpoint(
+            lambda rip=remote_ip,rport=remote_port: _UDPLocalListener(ghost_server,rip,rport),
+            local_addr=(local_ip,local_port)
+        )
+        transports.append(transport)
+        logger.info(f"UDP listening on {local_ip}:{local_port} -> {remote_ip}:{remote_port}")
+    return transports
 
 async def start_udp_server(ghost_server):
     loop=asyncio.get_event_loop()
