@@ -136,6 +136,7 @@ ping_timeout=60
 ws_pool_enabled=true
 ws_pool_children=8
 ws_pool_min=2
+ws_pool_stripe=false
 auto_update=${AUTO_UPDATE}
 update_check_interval=300
 update_check_on_startup=true
