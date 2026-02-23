@@ -93,7 +93,7 @@ class HTTP2ServerHandler:
                                         raise ValueError("Invalid token")
                                 elif msg_type==MSG_PUBKEY:
                                     client_public_key=deserialize_public_key(payload)
-                                    key=derive_key(self.token)
+                                    key=os.urandom(32)
                                     session_msg=pack_session_key(key,client_public_key)
                                     frame_data=struct.pack("!I",len(session_msg))+session_msg
                                     await self._send_framed_bytes(stream_id,frame_data,conn,writer,conn_lock,window_event,stop_event)
@@ -209,7 +209,7 @@ class HTTP2ServerHandler:
             if pubkey_type!=MSG_PUBKEY:
                 raise ValueError("Expected public key")
             client_public_key=deserialize_public_key(client_pubkey)
-            key=derive_key(self.token)
+            key=os.urandom(32)
             session_msg=pack_session_key(key,client_public_key)
             writer.write(struct.pack("!I",len(session_msg))+session_msg)
             await writer.drain()

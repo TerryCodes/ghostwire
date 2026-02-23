@@ -3,7 +3,6 @@ import os
 import hashlib
 from functools import lru_cache
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes,serialization
 from cryptography.hazmat.primitives.asymmetric import rsa,padding
 
@@ -41,11 +40,6 @@ def rsa_encrypt(public_key,plaintext):
 
 def rsa_decrypt(private_key,ciphertext):
     return private_key.decrypt(ciphertext,padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
-
-def derive_key(token):
-    salt=b"ghostwire.tunnel.aes256gcm.v1.2026"
-    kdf=PBKDF2HMAC(algorithm=hashes.SHA256(),length=32,salt=salt,iterations=100000)
-    return kdf.derive(token.encode())
 
 def encrypt_payload(key,plaintext,header):
     nonce=os.urandom(12)

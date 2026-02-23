@@ -143,12 +143,19 @@ class GhostWireServer:
         try:
             while not stop_event.is_set() or not send_queue.empty() or not control_queue.empty():
                 batch=bytearray()
+                queue_depth=send_queue.qsize()+control_queue.qsize()
+                if queue_depth<10:
+                    adaptive_batch_size=16384
+                elif queue_depth<50:
+                    adaptive_batch_size=self.ws_send_batch_bytes
+                else:
+                    adaptive_batch_size=min(self.ws_send_batch_bytes*2,131072)
                 for _ in range(64):
                     try:
                         batch.extend(control_queue.get_nowait())
                     except asyncio.QueueEmpty:
                         break
-                while len(batch)<self.ws_send_batch_bytes:
+                while len(batch)<adaptive_batch_size:
                     try:
                         batch.extend(send_queue.get_nowait())
                     except asyncio.QueueEmpty:
@@ -168,12 +175,12 @@ class GhostWireServer:
                         batch.extend(control_get.result())
                     if data_get in done:
                         batch.extend(data_get.result())
-                    while len(batch)<self.ws_send_batch_bytes:
+                    while len(batch)<adaptive_batch_size:
                         try:
                             batch.extend(control_queue.get_nowait())
                         except asyncio.QueueEmpty:
                             break
-                    while len(batch)<self.ws_send_batch_bytes:
+                    while len(batch)<adaptive_batch_size:
                         try:
                             batch.extend(send_queue.get_nowait())
                         except asyncio.QueueEmpty:
