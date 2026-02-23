@@ -3,8 +3,7 @@ import os
 import hashlib
 from functools import lru_cache
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes,serialization
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa,padding
 
 MSG_PUBKEY=0x00
@@ -26,6 +25,29 @@ MSG_CONNECT_UDP=0x0D
 def get_aesgcm(key):
     return AESGCM(key)
 
+def nanoid_to_bytes(token):
+    """Convert nanoid string to bytes (32 bytes for 43-char token)"""
+    DEFAULT_ALPHABET = "_~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    result = bytearray()
+    buffer = 0
+    bits_in_buffer = 0
+
+    for char in token:
+        value = DEFAULT_ALPHABET.index(char)
+        buffer = (buffer << 6) | value
+        bits_in_buffer += 6
+
+        if bits_in_buffer >= 8:
+            byte = (buffer >> (bits_in_buffer - 8)) & 0xFF
+            result.append(byte)
+            bits_in_buffer -= 8
+
+    # Ensure we have exactly 32 bytes
+    while len(result) < 32:
+        result.append(0)
+
+    return bytes(result[:32])
+
 def generate_rsa_keypair():
     private_key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
     return private_key,private_key.public_key()
@@ -43,9 +65,8 @@ def rsa_decrypt(private_key,ciphertext):
     return private_key.decrypt(ciphertext,padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
 
 def derive_key(token):
-    salt=b"ghostwire.tunnel.aes256gcm.v1.2026"
-    kdf=PBKDF2HMAC(algorithm=hashes.SHA256(),length=32,salt=salt,iterations=100000)
-    return kdf.derive(token.encode())
+    """Derive AES-256 key from nanoid token (43 chars -> 32 bytes)"""
+    return nanoid_to_bytes(token)
 
 def encrypt_payload(key,plaintext,header):
     nonce=os.urandom(12)
