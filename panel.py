@@ -212,7 +212,7 @@ def api_logs_stream():
                     yield f"data: {line.rstrip()}\n\n"
                     last_send=time.time()
                 elif time.time()-last_send>=10:
-                    yield ":\n\n"
+                    yield ": heartbeat\n\n"
                     last_send=time.time()
         except Exception as e:
             yield f"data: Error streaming logs: {e}\n\n"
