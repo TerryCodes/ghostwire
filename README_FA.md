@@ -72,13 +72,13 @@ sudo ./install-client.sh
 
 ## مستندات
 
-- [راهنمای نصب](/FrenchToblerone54/ghostwire/blob/main/docs/installation.md) - دستورالعمل‌های دقیق نصب برای سرور و کلاینت
+- **[راهنمای نصب](docs/installation.md)** - دستورالعمل‌های دقیق نصب برای سرور و کلاینت
 
-- [مرجع تنظیمات](/FrenchToblerone54/ghostwire/blob/main/docs/configuration.md) - گزینه‌های کامل تنظیمات
+- **[مرجع تنظیمات](docs/configuration.md)** - گزینه‌های کامل تنظیمات
 
-- [عیب‌یابی](/FrenchToblerone54/ghostwire/blob/main/docs/troubleshooting.md) - مشکلات رایج و راه‌حل‌ها
+- **[عیب‌یابی](docs/troubleshooting.md)** - مشکلات رایج و راه‌حل‌ها
 
-- [امنیت](/FrenchToblerone54/ghostwire/blob/main/docs/security.md) - جزئیات رمزنگاری و ملاحظات امنیتی
+- **[امنیت](docs/security.md)** - جزئیات رمزنگاری و ملاحظات امنیتی
 
 ## معماری
 
@@ -230,7 +230,7 @@ file="/var/log/ghostwire-client.log"
 
 - **`ws_pool_min`** (فقط سرور، پیش‌فرض: 2): حداقل کانال‌های همیشه متصل
 
-- **`ws_pool_stripe`** (فقط سرور، پیش‌فرض: false): توزیع پکت‌ها روی کانال‌ها — به دلیل ناپایداری زیر packet loss غیرفعال است
+- **`ws_pool_stripe`** (فقط سرور، پیش‌فرض: false): توزیع پکت‌ها روی کانال‌ها — به دلیل ناپایداری زیر ضعف سیگنال غیرفعال است
 
 - **`udp_enabled`** (فقط سرور، پیش‌فرض: true): گوش دادن UDP روی پورت‌های تونل
 
@@ -278,7 +278,7 @@ file="/var/log/ghostwire-client.log"
 
 - ✅ سازگار با CloudFlare (نیاز به Network → gRPC فعال دارد)
 
-- ✅ بالاترین کارایی пропуск (سریال‌سازی protobuf)
+- ✅ بالاترین کارایی توان عملیاتی (سریال‌سازی protobuf)
 
 - ✅ مولتیپلکسینگ جریان داخلی
 
